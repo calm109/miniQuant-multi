@@ -1,4 +1,4 @@
-# miniQuant — Multi-Platform Isoform Quantification
+# miniQuant-multi — Multi-Platform Isoform Quantification
 
 miniQuant_multi is a multi-platform RNA isoform quantification tool that integrates sequencing data generated from different platforms or multiple datasets from the same platform, including long-read (LR) and short-read (SR) sequencing. It uses a mixed Bayesian network framework, with parameter estimation performed via the expectation-maximization (EM) algorithm. miniQuant-multi also provides an identifiability analysis module, TrEESR, which computes identifiability indicators to quantify how well isoforms can be distinguished from one another.
 
