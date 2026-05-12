@@ -41,7 +41,7 @@ conda activate miniQuant-multi
 * Install `minimap2` (v2.24) and `bowtie2` (v2.4.1).
 
 ### Long-read alignment data mapped to the reference genome in SAM format
-##### use `minimap2` to map long reads data
+* Use `minimap2` to map long reads data
 ```bash
 # cDNA / ONT direct RNA
 minimap2 -t 3 -ax splice -uf --secondary=no \
@@ -53,7 +53,7 @@ minimap2 -t 3 -ax splice:hq --secondary=no \
 ```
 
 ### Short-read alignment data mapped to the reference transcriptome in SAM format.  
-##### use `Bowtie2` to map short reads data
+* Use `Bowtie2` to map short reads data
 ```bash
 # bowtie2 (transcriptome alignment)
 bowtie2-build transcriptome.fa bowtie2_index
