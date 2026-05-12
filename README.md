@@ -28,26 +28,12 @@ miniQuant-multi is a multi-platform RNA isoform quantification tool that integra
 
 ## Installation
 
-### Option 1: Conda environment (recommended)
+### Create conda environment (recommended)
 
 ```bash
 conda env create -f environment.yml
-conda activate miniQuant
+conda activate miniQuant-multi
 ```
-
-### Option 2: pip
-
-```bash
-pip install -r requirements.txt
-```
-
-### Option 3: Singularity container
-
-```bash
-singularity pull miniQuant.sif docker://your_registry/miniQuant:latest
-singularity exec miniQuant.sif python /path/to/isoform_quantification/main.py quantify ...
-```
-
 ---
 
 ## Data Preparation
