@@ -1,6 +1,6 @@
 # miniQuant-multi — Multi-Platform Isoform Quantification
 
-miniQuant-multi is a multi-platform RNA isoform quantification tool that integrates sequencing data generated from different platforms or multiple datasets from the same platform, including long-read (LR) and short-read (SR) sequencing. It uses a mixed Bayesian network framework, with parameter estimation performed via the expectation-maximization (EM) algorithm. miniQuant-multi also provides an identifiability analysis module, TrEESR, which computes identifiability indicators to quantify how well isoforms can be distinguished from one another.
+miniQuant-multi is a multi-platform RNA isoform quantification tool that integrates sequencing data generated from different platforms or multiple datasets from the same platform, including long-read (LR) and short-read (SR) sequencing. It uses a mixed Bayesian network framework, with parameter estimation performed via the expectation-maximization (EM) algorithm. miniQuant-multi also provides an identifiability analysis function that computes identifiability indicators to quantify how well isoforms can be distinguished from one another.
 
 ## Table of Contents
 
@@ -18,11 +18,18 @@ miniQuant-multi is a multi-platform RNA isoform quantification tool that integra
 
 ## Features
 
-- **Multi-platform support**: accepts Oxford Nanopore, PacBio (long reads) and Illumina (short reads) SAM files simultaneously
-- **Multi-sample support**: multiple LR and/or SR SAM files can be provided; a community-based parallel EM algorithm resolves each gene community independently
-- **Identifiability analysis (TrEESR)**: computes k-values and condition numbers that quantify how distinguishable isoforms are, both from pure annotation structure and from actual read data
-- **Adaptive alpha**: a pretrained model (`cDNA-ONT`, `dRNA-ONT`, `cDNA-PacBio`) automatically predicts the optimal LR/SR balance parameter α for each gene community
-- **Sample weighting**: supports equal weights (default), user-specified weights, or automatic quality-based weights derived from unique mapping rates
+- **Flexible input support**: accepts Illumina, Oxford Nanopore, and PacBio SAM files, allowing single-platform, multi-platform, or multi-sample analyses.
+- **Joint isoform quantification**: integrates multiple LR and/or SR datasets using a mixed Bayesian network with EM-based parameter estimation.
+- **Community-based parallel EM**: partitions genes into independent communities and resolves each community separately for efficient inference.
+- **Flexible sample weighting**: supports equal (default), user-defined, or quality-based sample weights estimated from unique mapping rates.
+- **Isoform identifiability analysis**: uses TrEESR to compute k-values and condition numbers that measure isoform distinguishability from annotation structure and read data.
+- 
+Flexible input support: accepts Illumina, Oxford Nanopore, and PacBio SAM files, allowing single-platform, multi-platform, or multi-sample analyses.
+Joint isoform quantification: integrates multiple LR and/or SR datasets using a mixed Bayesian network with EM-based parameter estimation.
+Community-based parallel EM: partitions genes into independent communities and resolves each community separately for efficient inference.
+Adaptive LR/SR balancing: predicts the optimal balance parameter α for each gene community using pretrained models such as cDNA-ONT, dRNA-ONT, and cDNA-PacBio.
+Flexible sample weighting: supports equal (default), user-defined, or quality-based sample weights estimated from unique mapping rates.
+Isoform identifiability analysis: uses TrEESR to compute k-values and condition numbers that measure isoform distinguishability from annotation structure and read data.
 
 ---
 
