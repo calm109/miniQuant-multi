@@ -22,7 +22,7 @@ miniQuant-multi is a multi-platform RNA isoform quantification tool that integra
 - **Joint isoform quantification**: integrates multiple LR and/or SR datasets using a mixed Bayesian network with EM-based parameter estimation.
 - **Community-based parallel EM**: partitions genes into independent communities and resolves each community separately for efficient inference.
 - **Flexible sample weighting**: supports equal (default), user-defined, or quality-based sample weights estimated from unique mapping rates.
-- **Isoform identifiability analysis**: uses TrEESR.py and identifiability.py to compute identifiability indicators that measure isoform distinguishability from annotation structure and read data.
+- **Isoform identifiability analysis**: uses `TrEESR.py` and `identifiability.py` to compute identifiability indicators that measure isoform distinguishability from annotation structure and read data.
 
 ---
 
