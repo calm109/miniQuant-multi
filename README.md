@@ -60,7 +60,10 @@ bowtie2-build transcriptome.fa bowtie2_index
 bowtie2 -x bowtie2_index -1 reads_R1.fastq.gz -2 reads_R2.fastq.gz -S SR.sam
 ```
 
-> **Note**: The SAM/BAM file must be coordinate-sorted or read-name sorted. Both genome-aligned and transcriptome-aligned SAM files are supported; miniQuant auto-detects the alignment mode.
+bowtie2-build -f transcriptome.fa bowtie2_index
+
+bowtie2 -q --phred33 --sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --score-min L,0,-0.1 -I 1 -X 1000 --no-mixed --no-discordant -p 10 -k 200 \
+-x bowtie2_index -1 reads_R1.fastq.gz -2 reads_R2.fastq.gz > SR.sam
 
 ---
 
