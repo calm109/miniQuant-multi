@@ -40,19 +40,19 @@ conda activate miniQuant-multi
 
 * Install `minimap2` (v2.24) and `bowtie2` (v2.4.1).
 
-### Long reads — genome alignment with minimap2
+### Long-read alignment data mapped to the reference genome in SAM format
 
 ```bash
 # cDNA / ONT direct RNA
-minimap2 -ax splice -uf --secondary=no \
+minimap2 -t 3 -ax splice -uf --secondary=no \
     reference_genome.fa long_reads.fastq.gz > LR.sam
 
 # PacBio Iso-Seq
-minimap2 -ax splice:hq --secondary=no \
+minimap2 -t 3 -ax splice:hq --secondary=no \
     reference_genome.fa long_reads.fastq.gz > LR.sam
 ```
 
-### Short reads — genome alignment with bowtie2
+### Short-read alignment data mapped to the reference transcriptome in SAM format.  
 
 ```bash
 # STAR (genome alignment, recommended)
