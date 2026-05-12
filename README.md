@@ -38,6 +38,8 @@ conda activate miniQuant-multi
 
 ## Data Preparation
 
+* Install `minimap2` (v2.24) and `bowtie2` (v2.4.1).
+
 ### Long reads — genome alignment with minimap2
 
 ```bash
@@ -50,7 +52,7 @@ minimap2 -ax splice:hq --secondary=no \
     reference_genome.fa long_reads.fastq.gz > LR.sam
 ```
 
-### Short reads — genome alignment with STAR or bowtie2
+### Short reads — genome alignment with bowtie2
 
 ```bash
 # STAR (genome alignment, recommended)
