@@ -67,36 +67,32 @@ bowtie2 -q --phred33 --sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --scor
 ## Quick Start
 
 ```bash
-cd isoform_quantification
+# Quantify analysis
+MINIQUANT_DIR="/path/miniQuant/isoform_quantification"
+GTF="/path/annotation.gtf"
+OUTPUT_DIR="/path/output"
+THREADS=8
+SR_SAMS=("/path/to/SR.sam")
+LR_SAMS=("/path/to/LR.sam")
 
-# Hybrid mode (LR + SR, single sample each)
-python main.py quantify \
-    -gtf annotation.gtf \
-    -lrsam LR.sam \
-    -srsam SR.sam \
-    -o output/ \
-    --EM_choice hybrid \
-    --pretrained_model_path cDNA-ONT
+[[ ${#LR_SAMS[@]} -gt 0 ]] && LR_ARGS="-lrsam ${LR_SAMS[*]}" || LR_ARGS=""
+[[ ${#SR_SAMS[@]} -gt 0 ]] && SR_ARGS="-srsam ${SR_SAMS[*]}" || SR_ARGS=""
 
-# LR-only
-python main.py quantify \
-    -gtf annotation.gtf \
-    -lrsam LR.sam \
-    -o output/
+mkdir -p "$OUTPUT_DIR"
+python "$MINIQUANT_DIR/main.py" quantify \
+    -gtf "$GTF" \
+    -o "$OUTPUT_DIR" \
+    -t "$THREADS" \
+    $LR_ARGS \
+    $SR_ARGS
 
-# SR-only
-python main.py quantify \
-    -gtf annotation.gtf \
-    -srsam SR.sam \
-    -o output/ \
-    --EM_choice SR
-
-# Identifiability analysis only
-python main.py cal_K_value \
-    -gtf annotation.gtf \
-    -lrsam LR.sam \
-    -srsam SR.sam \
-    -o output/
+# Identifiability analysis
+python "$MINIQUANT_DIR/main.py" cal_K_value \
+    -gtf "$GTF" \
+    -o "$OUTPUT_DIR" \
+    -t "$THREADS" \
+    $SR_ARGS \
+    $LR_ARGS
 ```
 
 ---
