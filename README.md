@@ -12,7 +12,6 @@ miniQuant-multi is a multi-platform RNA isoform quantification tool that integra
 - [Subcommand: `cal_K_value`](#subcommand-cal_k_value)
 - [Running Modes](#running-modes)
 - [Output Files](#output-files)
-- [Example Workflow](#example-workflow)
 
 ---
 
@@ -256,55 +255,6 @@ For multi-sample mode, reads and isoforms form a bipartite graph; connected comp
 | `k = inf` / `NaN` | Not identifiable (rank-deficient matrix) |
 
 > Genes with empty region sets (e.g., single-exon genes) appear in `kvalues.out` but are excluded from `identifiability.tsv`.
-
----
-
-## Example Workflow
-
-### Step 1: Quantify, then compute identifiability
-
-Use `run_miniQuant_quantify_then_kvalue.sh` as a template (adapts SR/LR SAM lists and output directory):
-
-```bash
-# Edit the script to set your paths
-vim run_miniQuant_quantify_then_kvalue.sh
-
-# Submit to cluster (SLURM) or run locally
-bash run_miniQuant_quantify_then_kvalue.sh
-```
-
-The script:
-1. Runs `quantify` (EM-based isoform abundance estimation)
-2. Runs `cal_K_value` using the default `read_length` region selection for identifiability analysis
-
-### Step 2: Identifiability analysis only
-
-```bash
-python isoform_quantification/main.py cal_K_value \
-    -gtf annotation.gtf \
-    -lrsam LR1.sam LR2.sam \
-    -srsam SR1.sam SR2.sam \
-    -o output/ \
-    -t 8 \
-    --output_matrix_info True
-```
-
-### Multi-sample hybrid quantification
-
-```bash
-python isoform_quantification/main.py quantify \
-    -gtf annotation.gtf \
-    -lrsam LR_rep1.sam LR_rep2.sam \
-    -srsam SR_rep1.sam SR_rep2.sam \
-    -o output/ \
-    -t 16 \
-    --EM_choice hybrid \
-    --pretrained_model_path cDNA-ONT \
-    --alpha adaptive \
-    --use_quality_weights \
-    --kde_lr \
-    --output_matrix_info True
-```
 
 ---
 
