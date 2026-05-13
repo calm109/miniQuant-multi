@@ -134,6 +134,7 @@ python main.py quantify -gtf <GTF> -o <OUTPUT> [options]
 | `--junction_site_tolerance` | `5` | Tolerance (bp) for matching splice junction sites |
 | `--lr_weights` | equal | Per-sample weights for LR files (same order as `-lrsam`), e.g. `--lr_weights 0.3 0.3`. By default all samples (LR + SR) share equal weights that sum to 1. |
 | `--sr_weights` | equal | Per-sample weights for SR files (same order as `-srsam`), e.g. `--sr_weights 0.4`. By default all samples (LR + SR) share equal weights that sum to 1. |
+
 ---
 
 ## Subcommand: `cal_K_value`
@@ -165,8 +166,6 @@ python main.py cal_K_value -gtf <GTF> -o <OUTPUT> [options]
 | `-t` / `--threads` | `1` | Number of threads |
 | `--sr_region_selection` | `read_length` | SR region selection mode: `read_length` (filter by actual read length), `real_data` (filter by observed reads) |
 | `--lr_region_selection` | `read_length` | LR region selection mode: `read_length` (filter by global median LR read length), `real_data` (use all observed regions) |
-| `--add_full_length_region` | `nonfullrank` | Whether to add zero-count full-length regions to LR A matrix: `all`, `nonfullrank`, `none` |
-| `--keep_sr_exon_region` | `nonfullrank` | Whether to keep zero-count exon regions in SR real_data mode: `nonfullrank`, `all`, `none` |
 | `--singular_values_tol` | `0` | Tolerance for treating small singular values as zero |
 | `--add_full_length_region` | `all` | Whether to keep zero-read-count regions in LR matrix A: `all`, `nonfullrank`, `none` |
 | `--normalize_lr_A` | `True` | Column-normalize LR design matrix A |
