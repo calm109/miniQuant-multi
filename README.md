@@ -151,12 +151,17 @@ python main.py cal_K_value -gtf <GTF> -o <OUTPUT> [options]
 | `-gtf` / `--gtf_annotation_path` | Path to GTF annotation file |
 | `-o` / `--output_path` | Output directory |
 
+### Input data (at least one required)
+
+| Argument | Description |
+|---|---|
+| `-lrsam` / `--long_read_sam_path` | Long-read SAM file(s) (used to build data-driven LR A matrix) |
+| `-srsam` / `--short_read_sam_path` | Short-read SAM file(s) (used to build data-driven SR A matrix) |
+
 ### Key optional arguments
 
 | Argument | Default | Description |
 |---|---|---|
-| `-lrsam` / `--long_read_sam_path` | — | Long-read SAM file(s) (used to build data-driven LR A matrix) |
-| `-srsam` / `--short_read_sam_path` | — | Short-read SAM file(s) (used to build data-driven SR A matrix) |
 | `-t` / `--threads` | `1` | Number of threads |
 | `--sr_region_selection` | `read_length` | SR region selection mode: `read_length` (filter by actual read length), `real_data` (filter by observed reads) |
 | `--lr_region_selection` | `read_length` | LR region selection mode: `read_length` (filter by global median LR read length), `real_data` (use all observed regions) |
