@@ -219,12 +219,12 @@ All inputs route through `EM_hybrid_multi` (community-based parallel EM), where 
 | File | Description |
 |---|---|
 | `kvalues_gene.out` | Per-gene A-matrix-based metrics (annotation structure only, no EM required): k-value, regular/generalized condition number, and A matrix dimensions for each SR/LR sample plus Hybrid (when both LR and SR are provided) |
-| `kvalues_isoform.out` | Per-isoform attributes: isoform length, exon count, and gene membership. |
-| `identifiability.tsv` | Per-gene Fisher information matrix-based identifiability metrics (requires EM quantification results): k_value (A matrix and Fisher information matrix), condition number, minimum eigenvalue, and identifiability flag for each sample and platform (LR, SR, Hybrid) |
-| `isoform_SE_CI.tsv` | Per-isoform standard errors and 95% confidence intervals of EM-estimated abundance (θ), computed from the Fisher information matrix |
+| `kvalues_isoform.out` | Per-isoform attributes: isoform length, exon count, and gene membership. Join with `kvalues_gene.out` on `Gene` for A-matrix condition number metrics |
+| `identifiability.tsv` | Per-gene identifiability metrics (requires EM quantification results): minimum positive singular value of the restricted Jacobian (`_rJacobi_sigma_min_pos`), restricted Fisher information matrix metrics including k-value (`_rfisher_k_value`), condition number (`_rfisher_cond`), minimum eigenvalue (`_rfisher_lambda_min`), and identifiability flag (`_rfisher_identifiable`), for each sample and platform (LR, SR, Hybrid) |
+| `isoform_SE_CI.tsv` | Per-isoform standard errors and 95% confidence intervals of EM-estimated abundance (θ), computed from the restricted Fisher information matrix |
 | `SR_singular_values.out` / `SR_{i}_singular_values.out` | Per-gene singular values of the SR A matrix (one file per sample when multiple SR files are provided) |
 | `LR_singular_values.out` / `LR_{i}_singular_values.out` | Per-gene singular values of the LR A matrix (one file per sample when multiple LR files are provided) |
-
+  
 > Genes with empty region sets (e.g., single-exon genes) appear in `kvalues.out` but are excluded from `identifiability.tsv`.
 
 ---
