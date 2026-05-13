@@ -217,6 +217,7 @@ All inputs route through `EM_hybrid_multi` (community-based parallel EM), where 
 ### `cal_identifiability` output
 
 | File | Description |
+|---|---|
 | `kvalues_gene.out` | Per-gene A-matrix-based metrics (annotation structure only, no EM required): k-value, regular/generalized condition number, and A matrix dimensions for each SR/LR
    sample plus Hybrid (when both LR and SR are provided) |
 | `kvalues_isoform.out` | Per-isoform attributes: isoform length, exon count, and gene membership. |
