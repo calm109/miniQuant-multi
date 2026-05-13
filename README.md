@@ -71,13 +71,21 @@ MINIQUANT_DIR="/path/miniQuant/isoform_quantification"
 GTF="/path/annotation.gtf"
 OUTPUT_DIR="/path/output"
 THREADS=8
-SR_SAMS=("/path/to/SR.sam")
-LR_SAMS=("/path/to/LR.sam")
+SR_SAMS=("/path/to/SR1.sam" "/path/to/SR2.sam")
+LR_SAMS=("/path/to/LR1.sam" "/path/to/LR2.sam")
 
 [[ ${#LR_SAMS[@]} -gt 0 ]] && LR_ARGS="-lrsam ${LR_SAMS[*]}" || LR_ARGS=""
 [[ ${#SR_SAMS[@]} -gt 0 ]] && SR_ARGS="-srsam ${SR_SAMS[*]}" || SR_ARGS=""
-
+LR_ARGS=""
+if [[ ${#LR_SAMS[@]} -gt 0 ]]; then
+    LR_ARGS="-lrsam ${LR_SAMS[*]}"
+fi
+SR_ARGS=""
+if [[ ${#SR_SAMS[@]} -gt 0 ]]; then
+    SR_ARGS="-srsam ${SR_SAMS[*]}"
+fi
 mkdir -p "$OUTPUT_DIR"
+
 python "$MINIQUANT_DIR/main.py" quantify \
     -gtf "$GTF" \
     -o "$OUTPUT_DIR" \
