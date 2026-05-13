@@ -114,8 +114,8 @@ python main.py quantify -gtf <GTF> -o <OUTPUT> [options]
 
 | Argument | Description |
 |---|---|
-| `-gtf` / `--gtf_annotation_path` | Path to GTF annotation file |
-| `-o` / `--output_path` | Output directory |
+| -gtf / --gtf_annotation_path | Path to GTF annotation file |
+| -o / --output_path | Output directory |
 
 ### Input data (at least one required)
 
@@ -128,40 +128,17 @@ python main.py quantify -gtf <GTF> -o <OUTPUT> [options]
 
 | Argument | Default | Description |
 |---|---|---|
-| `--EM_choice` | `LR` | Quantification mode: `LR` (long-read only), `SR` (short-read only), `hybrid` (LR + SR). Automatically set to `hybrid` when both are provided. |
-| `--pretrained_model_path` | `cDNA-ONT` | Pretrained model for adaptive α: `cDNA-ONT`, `dRNA-ONT`, `cDNA-PacBio`, or a custom path |
-| `--alpha` | `adaptive` | LR/SR balance (0=SR only, 1=LR only). `adaptive` uses the pretrained model per gene community |
 | `-t` / `--threads` | `1` | Number of threads |
-| `--filtering` | `False` | Filter very short long reads (`True`/`False`) |
 | `--EM_SR_num_iters` | `200` | Number of SR EM iterations |
 | `--isoform_start_end_site_tolerance` | `20` | Tolerance (bp) for matching LR start/end sites to isoform boundaries |
 | `--junction_site_tolerance` | `5` | Tolerance (bp) for matching splice junction sites |
-| `--LR_cond_prob_calc` | `form_2` | LR conditional probability model: `form_1` or `form_2` |
-| `--add_full_length_region` | `all` | Whether to keep zero-read-count regions in LR matrix A: `all`, `nonfullrank`, `none` |
-| `--normalize_lr_A` | `True` | Column-normalize LR design matrix A |
-| `--normalize_sr_A` | `True` | Column-normalize SR design matrix A |
-| `--sr_region_selection` | `read_length` | SR region filtering: `read_length` (filter by read length coverage), `real_data` (filter by actual reads) |
-| `--kde_lr` | `False` | Train a KDE model from LR data to weight the LR A matrix |
-| `--keep_kde_lr` | `False` | Keep the trained KDE model file after the run |
-| `--output_matrix_info` | `False` | Output per-gene A matrices and b vectors to `matrix_info/` |
-
-### Multi-sample weighting arguments
-
-| Argument | Default | Description |
-|---|---|---|
-| `--lr_weights` | (equal) | Per-sample weights for LR files (same order as `-lrsam`), e.g. `--lr_weights 0.3 0.3` |
-| `--sr_weights` | (equal) | Per-sample weights for SR files (same order as `-srsam`) |
-| `--use_quality_weights` | `False` | Automatically weight samples by unique mapping rate |
-| `--normalize_q` | `False` | Normalize each sample's q by its sum before weighting in multi-sample E-step |
-
-> When neither `--lr_weights`/`--sr_weights` nor `--use_quality_weights` is set, all samples receive equal weight.  
-> When `--lr_weights`/`--sr_weights` are given, they take precedence over `--use_quality_weights` for the respective group.
-
+| `--lr_weights` | equal | Per-sample weights for LR files (same order as `-lrsam`), e.g. `--lr_weights 0.3 0.3`. By default all samples (LR + SR) share equal weights that sum to 1. |
+| `--sr_weights` | equal | Per-sample weights for SR files (same order as `-srsam`), e.g. `--sr_weights 0.4`. By default all samples (LR + SR) share equal weights that sum to 1. |
 ---
 
 ## Subcommand: `cal_K_value`
 
-Computes identifiability metrics (k-values, condition numbers) for all genes without running quantification.
+Computes identifiability metrics (least eigenvalue, condition numbers, standard deviation, and confidence interval) for all genes after running quantification.
 
 ```
 python main.py cal_K_value -gtf <GTF> -o <OUTPUT> [options]
@@ -184,13 +161,12 @@ python main.py cal_K_value -gtf <GTF> -o <OUTPUT> [options]
 | `--sr_region_selection` | `read_length` | SR region selection mode: `read_length` (filter by actual read length), `real_data` (filter by observed reads) |
 | `--lr_region_selection` | `read_length` | LR region selection mode: `read_length` (filter by global median LR read length), `real_data` (use all observed regions) |
 | `--add_full_length_region` | `nonfullrank` | Whether to add zero-count full-length regions to LR A matrix: `all`, `nonfullrank`, `none` |
-| `--normalize_lr_A` | `True` | Column-normalize LR A matrix |
-| `--normalize_sr_A` | `True` | Column-normalize SR A matrix |
-| `--same_struc_isoform_handling` | `merge` | How to handle isoforms with identical exon structure: `merge`, `keep` |
 | `--keep_sr_exon_region` | `nonfullrank` | Whether to keep zero-count exon regions in SR real_data mode: `nonfullrank`, `all`, `none` |
-| `--output_matrix_info` | `False` | Output per-gene A matrices to `matrix_info/` |
-| `--kde_lr` | `True` | Train KDE model from LR data for LR A matrix weighting |
 | `--singular_values_tol` | `0` | Tolerance for treating small singular values as zero |
+| `--add_full_length_region` | `all` | Whether to keep zero-read-count regions in LR matrix A: `all`, `nonfullrank`, `none` |
+| `--normalize_lr_A` | `True` | Column-normalize LR design matrix A |
+| `--normalize_sr_A` | `True` | Column-normalize SR design matrix A |
+| `--output_matrix_info` | `False` | Output per-gene A matrices and b vectors to `matrix_info/` |
 
 ---
 
