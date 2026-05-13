@@ -177,30 +177,23 @@ python main.py cal_K_value -gtf <GTF> -o <OUTPUT> [options]
 
 ### Routing logic
 
-The `quantify` subcommand automatically selects the computation path:
+The `quantify` subcommand automatically selects the computation path based on the input data provided:
 
 | Condition | Mode | Algorithm |
 |---|---|---|
-| Only SR provided (any number) | SR / multi-SR | `EM_hybrid_multi` with empty LR placeholder |
-| Only LR provided, single file | LR-only | `EM_hybrid` (LIQA-modified) |
-| Only LR provided, multiple files | multi-LR | `EM_hybrid_multi` |
+| Only SR provided (any number) | SR-only | `EM_hybrid_multi` |
+| Only LR provided (any number) | LR-only | `EM_hybrid_multi` |
 | Both LR and SR provided | Hybrid | `EM_hybrid_multi` |
 
-**`is_multi` flag**: routing to `EM_hybrid_multi` (community-based parallel EM) occurs when:
-- More than one SR file is provided, OR
-- More than one LR file is provided, OR
-- Any SR file is provided (even a single SR file uses the multi-sample path)
-
-### Community-based EM
-
-For multi-sample mode, reads and isoforms form a bipartite graph; connected components (gene communities) are solved independently in parallel. This allows efficient parallel computation and reduces interference between unrelated genes.
-
+All inputs route through `EM_hybrid_multi` (community-based parallel EM), where reads and isoforms form a bipartite graph and connected components (gene communities) are solved independently in parallel. The
+  mode (SR-only, LR-only, or hybrid) is determined automatically from which input files are provided — no manual flag needed.
+  
 ### Alpha (LR/SR balance)
 
 - `alpha = 1.0`: LR-only quantification
 - `alpha = 0.0`: SR-only quantification
 - `0 < alpha < 1`: hybrid mode, weighting the contribution of LR vs SR
-- `adaptive` (default): a pretrained XGBoost model predicts optimal α per gene community based on data characteristics
+- Default: `0.5` (equal weighting between LR and SR)
 
 ---
 
