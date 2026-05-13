@@ -217,14 +217,15 @@ All inputs route through `EM_hybrid_multi` (community-based parallel EM), where 
 ### `cal_identifiability` output
 
 | File | Description |
-|---|---|
-| `kvalues.out` | Per-gene k-values: one column per SR/LR sample plus `Hybrid_k_value` (when both LR and SR are provided) |
-| `kvalues_gene.out` | Per-gene detailed metrics: singular value product, k-value, regular/generalized condition number, and A matrix dimensions for each sample |
-| `kvalues_isoform.out` | Per-isoform detailed metrics: same condition number metrics as `kvalues_gene.out`, plus isoform length and exon count |
-| `SR_singular_values.out` / `SR_{i}_singular_values.out` | Per-gene singular values of the SR feature matrix (one file per sample when multiple SR files are provided) |
-| `LR_singular_values.out` / `LR_{i}_singular_values.out` | Per-gene singular values of the LR feature matrix (one file per sample when multiple LR files are provided) |
-| `identifiability.tsv` | Per-gene Fisher information-based identifiability metrics: k-value, Fisher condition number, minimum Fisher eigenvalue, and identifiability flag for each sample and platform (LR, SR, Hybrid) |
+| `kvalues_gene.out` | Per-gene A-matrix-based metrics (annotation structure only, no EM required): k-value, regular/generalized condition number, and A matrix dimensions for each SR/LR
+   sample plus Hybrid (when both LR and SR are provided) |
+| `kvalues_isoform.out` | Per-isoform attributes: isoform length, exon count, and gene membership. |
+| `identifiability.tsv` | Per-gene Fisher information matrix-based identifiability metrics (requires EM quantification results): k_value (A matrix and Fisher information matrix), condition number, minimum eigenvalue, and identifiability flag for each sample and platform (LR, SR, Hybrid) |
 | `isoform_SE_CI.tsv` | Per-isoform standard errors and 95% confidence intervals of EM-estimated abundance (θ), computed from the Fisher information matrix |
+| `SR_singular_values.out` / `SR_{i}_singular_values.out` | Per-gene singular values of the SR A matrix (one file per sample when multiple SR files are provided) |
+| `LR_singular_values.out` / `LR_{i}_singular_values.out` | Per-gene singular values of the LR A matrix (one file per sample when multiple LR files are provided) |
+
+
 
 > Genes with empty region sets (e.g., single-exon genes) appear in `kvalues.out` but are excluded from `identifiability.tsv`.
 
