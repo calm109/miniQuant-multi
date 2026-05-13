@@ -132,8 +132,6 @@ python main.py quantify -gtf <GTF> -o <OUTPUT> [options]
 | `--EM_SR_num_iters` | `200` | Number of SR EM iterations |
 | `--isoform_start_end_site_tolerance` | `20` | Tolerance (bp) for matching LR start/end sites to isoform boundaries |
 | `--junction_site_tolerance` | `5` | Tolerance (bp) for matching splice junction sites |
-| `--lr_weights` | equal | Per-sample weights for LR files (same order as `-lrsam`), e.g. `--lr_weights 0.3 0.3`. By default all samples (LR + SR) share equal weights that sum to 1. |
-| `--sr_weights` | equal | Per-sample weights for SR files (same order as `-srsam`), e.g. `--sr_weights 0.4`. By default all samples (LR + SR) share equal weights that sum to 1. |
 
 ---
 
