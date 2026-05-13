@@ -9,7 +9,7 @@ miniQuant-multi is a multi-platform RNA isoform quantification tool that integra
 - [Data Preparation](#data-preparation)
 - [Quick Start](#quick-start)
 - [Subcommand: `quantify`](#subcommand-quantify)
-- [Subcommand: `cal_K_value`](#subcommand-cal_k_value)
+- [Subcommand: `cal_identifiability`](#subcommand-cal_identifiability)
 - [Running Modes](#running-modes)
 - [Output Files](#output-files)
 
