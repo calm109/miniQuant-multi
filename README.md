@@ -258,17 +258,3 @@ For multi-sample mode, reads and isoforms form a bipartite graph; connected comp
 
 ---
 
-## Dependencies
-
-| Package | Version |
-|---|---|
-| numpy | ≥ 1.17 |
-| scipy | ≥ 1.5 |
-| pandas | ≥ 1.1 |
-| pysam | ≥ 0.21 |
-| scikit-learn | ≥ 1.0 |
-| xgboost | ≥ 2.0 |
-| intervaltree | ≥ 3.1 |
-| Cython | ≥ 0.29 |
-
-See `requirements.txt` for exact pinned versions.
