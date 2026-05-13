@@ -162,9 +162,9 @@ python main.py cal_identifiability -gtf <GTF> -o <OUTPUT> [options]
 | Argument | Default | Description |
 |---|---|---|
 | `-t` / `--threads` | `1` | Number of threads |
-| `--sr_region_selection` | `read_length` | SR region selection mode: `read_length` ... |
-| `--lr_region_selection` | `read_length` | LR region selection mode: `read_length` ... |
-| `--add_full_length_region` | `all` | Whether to keep zero-read-count regions in LR matrix A ... |
+| `--sr_region_selection` | `read_length` | SR region selection mode: `read_length` (filter by actual read length), `real_data` (filter by observed reads) |
+| `--lr_region_selection` | `read_length` | LR region selection mode: `read_length` (filter by global median LR read length), `real_data` (use all observed regions) |
+| `--add_full_length_region` | `all` | Whether to keep zero-read-count regions in LR matrix A: `all`, `nonfullrank`, `none` |
 | `--normalize_lr_A` | `True` | Column-normalize LR design matrix A |
 | `--normalize_sr_A` | `True` | Column-normalize SR design matrix A |
 | `--output_matrix_info` | `False` | Output per-gene A matrices and b vectors to `matrix_info/` |
