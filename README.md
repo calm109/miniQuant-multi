@@ -94,7 +94,7 @@ python "$MINIQUANT_DIR/main.py" quantify \
     $SR_ARGS
 
 # Identifiability analysis
-python "$MINIQUANT_DIR/main.py" cal_K_value \
+python "$MINIQUANT_DIR/main.py" cal_identifiability \
     -gtf "$GTF" \
     -o "$OUTPUT_DIR" \
     -t "$THREADS" \
@@ -135,12 +135,12 @@ python main.py quantify -gtf <GTF> -o <OUTPUT> [options]
 
 ---
 
-## Subcommand: `cal_K_value`
+## Subcommand: `cal_identifiability`
 
 Computes identifiability metrics (least eigenvalue, condition numbers, standard deviation, and confidence interval) for all genes after running quantification.
 
 ```
-python main.py cal_K_value -gtf <GTF> -o <OUTPUT> [options]
+python main.py cal_identifiability -gtf <GTF> -o <OUTPUT> [options]
 ```
 
 ### Required arguments
@@ -214,7 +214,7 @@ All inputs route through `EM_hybrid_multi` (community-based parallel EM), where 
 | `read_count` | Estimated read count |
 | `length` | Transcript length (bp) |
 
-### `cal_K_value` output
+### `cal_identifiability` output
 
 | File | Description |
 |---|---|
