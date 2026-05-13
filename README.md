@@ -159,8 +159,8 @@ python main.py cal_identifiability -gtf <GTF> -o <OUTPUT> [options]
 
 ### Key optional arguments
 
-| Argument &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Default | Description |
-|:---|:---|:---|
+| Argument | Default | Description |
+|---|---|---|
 | `-t` / `--threads` | `1` | Number of threads |
 | `--sr_region_selection` | `read_length` | SR region selection mode: `read_length` ... |
 | `--lr_region_selection` | `read_length` | LR region selection mode: `read_length` ... |
