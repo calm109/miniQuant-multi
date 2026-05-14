@@ -34,6 +34,7 @@ git clone https://github.com/calm109/miniQuant-multi.git
 cd miniQuant-multi
 conda env create -f environment.yml
 conda activate miniQuant-multi
+bash run_miniquant_example.sh
 ```
 ---
 
