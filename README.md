@@ -30,6 +30,8 @@ miniQuant-multi is a multi-platform RNA isoform quantification tool that integra
 ### Create conda environment (recommended)
 
 ```bash
+git clone https://github.com/calm109/miniQuant-multi.git
+cd miniQuant-multi
 conda env create -f environment.yml
 conda activate miniQuant-multi
 ```
@@ -71,7 +73,7 @@ MINIQUANT_DIR="$BASE_DIR/isoform_quantification"
 DATA_DIR="$BASE_DIR/example_data"
 GTF="$DATA_DIR/annotation.gtf"
 OUTPUT_DIR="$BASE_DIR/output"
-THREADS=8
+THREADS=1
 
 # Input files from example_data
 SR_SAMS=("$DATA_DIR/SR1.sam" "$DATA_DIR/SR2.sam")
