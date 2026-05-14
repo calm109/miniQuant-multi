@@ -70,7 +70,7 @@ bowtie2 -q --phred33 --sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --scor
 ```bash
 BASE_DIR="/path/miniQuant-multi"
 MINIQUANT_DIR="$BASE_DIR/isoform_quantification"
-DATA_DIR="$BASE_DIR/example_data"
+DATA_DIR="$BASE_DIR/example"
 GTF="$DATA_DIR/annotation.gtf"
 OUTPUT_DIR="$BASE_DIR/output"
 THREADS=1
