@@ -66,16 +66,17 @@ bowtie2 -q --phred33 --sensitive --dpad 0 --gbar 99999999 --mp 1,1 --np 1 --scor
 ## Quick Start
 
 ```bash
-# Quantify analysis
-MINIQUANT_DIR="/path/miniQuant/isoform_quantification"
-GTF="/path/annotation.gtf"
-OUTPUT_DIR="/path/output"
+BASE_DIR="/path/miniQuant-multi"
+MINIQUANT_DIR="$BASE_DIR/isoform_quantification"
+DATA_DIR="$BASE_DIR/example_data"
+GTF="$DATA_DIR/annotation.gtf"
+OUTPUT_DIR="$BASE_DIR/output"
 THREADS=8
-SR_SAMS=("/path/to/SR1.sam" "/path/to/SR2.sam")
-LR_SAMS=("/path/to/LR1.sam" "/path/to/LR2.sam")
 
-[[ ${#LR_SAMS[@]} -gt 0 ]] && LR_ARGS="-lrsam ${LR_SAMS[*]}" || LR_ARGS=""
-[[ ${#SR_SAMS[@]} -gt 0 ]] && SR_ARGS="-srsam ${SR_SAMS[*]}" || SR_ARGS=""
+# Input files from example_data
+SR_SAMS=("$DATA_DIR/SR1.sam" "$DATA_DIR/SR2.sam")
+LR_SAMS=("$DATA_DIR/LR1.sam" "$DATA_DIR/LR2.sam")
+
 LR_ARGS=""
 if [[ ${#LR_SAMS[@]} -gt 0 ]]; then
     LR_ARGS="-lrsam ${LR_SAMS[*]}"
@@ -86,6 +87,7 @@ if [[ ${#SR_SAMS[@]} -gt 0 ]]; then
 fi
 mkdir -p "$OUTPUT_DIR"
 
+# 1. Quantify analysis
 python "$MINIQUANT_DIR/main.py" quantify \
     -gtf "$GTF" \
     -o "$OUTPUT_DIR" \
@@ -93,7 +95,7 @@ python "$MINIQUANT_DIR/main.py" quantify \
     $LR_ARGS \
     $SR_ARGS
 
-# Identifiability analysis
+# 2. Identifiability analysis
 python "$MINIQUANT_DIR/main.py" cal_identifiability \
     -gtf "$GTF" \
     -o "$OUTPUT_DIR" \
