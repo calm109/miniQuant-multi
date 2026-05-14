@@ -76,8 +76,8 @@ OUTPUT_DIR="$BASE_DIR/output"
 THREADS=1
 
 # Input files from example_data
-SR_SAMS=("$DATA_DIR/SR1.sam" "$DATA_DIR/SR2.sam")
-LR_SAMS=("$DATA_DIR/LR1.sam" "$DATA_DIR/LR2.sam")
+SR_SAMS=("$DATA_DIR/SR.sam" "$DATA_DIR/SR.sam")
+LR_SAMS=("$DATA_DIR/LR.sam" "$DATA_DIR/LR.sam")
 
 LR_ARGS=""
 if [[ ${#LR_SAMS[@]} -gt 0 ]]; then
