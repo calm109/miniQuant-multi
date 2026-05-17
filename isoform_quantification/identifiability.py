@@ -111,24 +111,25 @@ def _metrics_from_Fisher(F_tan):
     Compute Fisher condition number and identifiability flag from the restricted
     Fisher matrix F_tan (symmetric, (T-1) x (T-1)).
 
-    Returns (fisher_cond, lambda_min, fisher_identifiable, fisher_det):
-      fisher_cond         : lambda_max / lambda_min_pos  (nan if rank 0)
-      lambda_min          : smallest positive eigenvalue (nan if none)
+    Returns (fisher_lambda_cond, lambda_min, fisher_identifiable, fisher_det):
+      fisher_lambda_cond  : lambda_max / lambda_min  (nan if lambda_min == 0)
+      lambda_min          : smallest eigenvalue thresholded at _FISHER_EIG_TOL;
+                            eigenvalues < _FISHER_EIG_TOL are set to 0.
+                            0 for non-identifiable matrices, actual value otherwise.
       fisher_identifiable : True if F_tan is positive definite (all eigenvalues
-                            > _FISHER_EIG_TOL), else False
-                            Positive definite <=> locally practically identifiable.
+                            >= _FISHER_EIG_TOL), else False.
       fisher_det          : det(F_tan)  — D-optimality metric; 0 when not PD.
     """
     eigvals = np.linalg.eigvalsh(F_tan)          # ascending order
-    is_identifiable = bool(float(eigvals[0]) > _FISHER_EIG_TOL)   # all positive?
+    eigvals_clipped = np.maximum(eigvals, 0.0)    # PSD guarantee; clip fp negatives
+    lambda_max = float(eigvals_clipped[-1])
     fisher_det = float(np.linalg.det(F_tan))
-    pos = eigvals[eigvals > _FISHER_EIG_TOL]
-    if len(pos) == 0:
-        return math.nan, math.nan, is_identifiable, fisher_det
-    lambda_min = float(pos[0])
-    lambda_max = float(eigvals[-1])
-    fisher_cond = lambda_max / lambda_min
-    return fisher_cond, lambda_min, is_identifiable, fisher_det
+    # eigenvalues < _FISHER_EIG_TOL are treated as 0; lambda_min = 0 for non-identifiable
+    thresholded = np.where(eigvals_clipped < _FISHER_EIG_TOL, 0.0, eigvals_clipped)
+    lambda_min = float(thresholded[0])
+    fisher_lambda_cond = lambda_max / lambda_min if lambda_min > 0 else math.nan
+    is_identifiable = bool(lambda_min > 0)   # positive definite: lambda_min > 0 iff all eigenvalues >= _FISHER_EIG_TOL
+    return fisher_lambda_cond, lambda_min, is_identifiable, fisher_det
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +273,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
                 result[f'LR_{k+1}'] = {
                     'k_orig': k_orig_k,
                     'k_value': kv_k, 'sigma_max': sm_k, 'sigma_min': smi_k,
-                    'fisher_cond': fc_k, 'fisher_lambda_min': flmin_k,
+                    'fisher_lambda_cond': fc_k, 'fisher_lambda_min': flmin_k,
                     'fisher_identifiable': fi_k, 'fisher_det': fd_k,
                     'se_ci': _compute_se_ci(F_Lk, B, theta_hat_em),
                 }
@@ -282,7 +283,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         fc_LR, flmin_LR, fi_LR, fd_LR = _metrics_from_Fisher(F_L)
         result['LR'].update({
             'k_value': k_LR, 'sigma_max': smax_LR, 'sigma_min': smin_LR,
-            'fisher_cond': fc_LR, 'fisher_lambda_min': flmin_LR,
+            'fisher_lambda_cond': fc_LR, 'fisher_lambda_min': flmin_LR,
             'fisher_identifiable': fi_LR, 'fisher_det': fd_LR,
             'se_ci': _compute_se_ci(F_L, B, theta_hat_em),
         })
@@ -316,7 +317,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
                 result[f'SR_{k+1}'] = {
                     'k_orig': k_orig_k,
                     'k_value': kv_k, 'sigma_max': sm_k, 'sigma_min': smi_k,
-                    'fisher_cond': fc_k, 'fisher_lambda_min': fsmin_k,
+                    'fisher_lambda_cond': fc_k, 'fisher_lambda_min': fsmin_k,
                     'fisher_identifiable': fi_k, 'fisher_det': fd_k,
                     'se_ci': _compute_se_ci(F_Sk, B, theta_hat_em),
                 }
@@ -326,7 +327,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         fc_SR, fsmin_SR, fi_SR, fd_SR = _metrics_from_Fisher(F_S)
         result['SR'].update({
             'k_value': k_SR, 'sigma_max': smax_SR, 'sigma_min': smin_SR,
-            'fisher_cond': fc_SR, 'fisher_lambda_min': fsmin_SR,
+            'fisher_lambda_cond': fc_SR, 'fisher_lambda_min': fsmin_SR,
             'fisher_identifiable': fi_SR, 'fisher_det': fd_SR,
             'se_ci': _compute_se_ci(F_S, B, theta_hat_em),
         })
@@ -341,7 +342,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         fc_H, fhmin_H, fi_H, fd_H = _metrics_from_Fisher(F_H)
         result['Hybrid'] = {
             'k_value': k_H, 'sigma_max': smax_H, 'sigma_min': smin_H,
-            'fisher_cond': fc_H, 'fisher_lambda_min': fhmin_H,
+            'fisher_lambda_cond': fc_H, 'fisher_lambda_min': fhmin_H,
             'fisher_identifiable': fi_H, 'fisher_det': fd_H,
             'se_ci': _compute_se_ci(F_H, B, theta_hat_em),
         }
@@ -599,53 +600,53 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
                 m_k = metrics[tag_k]
                 row.update({
                     f'{tag_k}_rJacobi_sigma_min_pos':      _fmt(m_k.get('sigma_min', math.nan)),
-                    f'{tag_k}_rJacobi_k_value':    _fmt(m_k.get('k_value', math.nan)),
-                    f'{tag_k}_rfisher_lambda_min': _fmt(m_k.get('fisher_lambda_min', math.nan)),
-                    f'{tag_k}_rfisher_cond':       _fmt(m_k.get('fisher_cond', math.nan)),
-                    f'{tag_k}_rfisher_det':        _fmt(m_k.get('fisher_det', math.nan)),
-                    f'{tag_k}_rfisher_identifiable': m_k.get('fisher_identifiable', 'nan'),
+                    f'{tag_k}_rJacobi_k_value':            _fmt(m_k.get('k_value', math.nan)),
+                    f'{tag_k}_rfisher_lambda_min':         _fmt(m_k.get('fisher_lambda_min', math.nan)),
+                    f'{tag_k}_rfisher_lambda_cond':        _fmt(m_k.get('fisher_lambda_cond', math.nan)),
+                    f'{tag_k}_rfisher_det':                _fmt(m_k.get('fisher_det', math.nan)),
+                    f'{tag_k}_rfisher_identifiable':       m_k.get('fisher_identifiable', 'nan'),
                 })
             for tag_k in sr_per_sample_keys:
                 m_k = metrics[tag_k]
                 row.update({
                     f'{tag_k}_rJacobi_sigma_min_pos':      _fmt(m_k.get('sigma_min', math.nan)),
-                    f'{tag_k}_rJacobi_k_value':    _fmt(m_k.get('k_value', math.nan)),
-                    f'{tag_k}_rfisher_lambda_min': _fmt(m_k.get('fisher_lambda_min', math.nan)),
-                    f'{tag_k}_rfisher_cond':       _fmt(m_k.get('fisher_cond', math.nan)),
-                    f'{tag_k}_rfisher_det':        _fmt(m_k.get('fisher_det', math.nan)),
-                    f'{tag_k}_rfisher_identifiable': m_k.get('fisher_identifiable', 'nan'),
+                    f'{tag_k}_rJacobi_k_value':            _fmt(m_k.get('k_value', math.nan)),
+                    f'{tag_k}_rfisher_lambda_min':         _fmt(m_k.get('fisher_lambda_min', math.nan)),
+                    f'{tag_k}_rfisher_lambda_cond':        _fmt(m_k.get('fisher_lambda_cond', math.nan)),
+                    f'{tag_k}_rfisher_det':                _fmt(m_k.get('fisher_det', math.nan)),
+                    f'{tag_k}_rfisher_identifiable':       m_k.get('fisher_identifiable', 'nan'),
                 })
             # 平台合并指标（仅在非冗余时输出）
             if has_LR and not lr_platform_redundant:
                 lr_m = metrics['LR']
                 row.update({
-                    'LR_rJacobi_sigma_min_pos':      _fmt(lr_m.get('sigma_min', math.nan)),
-                    'LR_rJacobi_k_value':    _fmt(lr_m.get('k_value', math.nan)),
-                    'LR_rfisher_lambda_min': _fmt(lr_m.get('fisher_lambda_min', math.nan)),
-                    'LR_rfisher_cond':       _fmt(lr_m.get('fisher_cond', math.nan)),
-                    'LR_rfisher_det':        _fmt(lr_m.get('fisher_det', math.nan)),
-                    'LR_rfisher_identifiable': lr_m.get('fisher_identifiable', 'nan'),
+                    'LR_rJacobi_sigma_min_pos':  _fmt(lr_m.get('sigma_min', math.nan)),
+                    'LR_rJacobi_k_value':        _fmt(lr_m.get('k_value', math.nan)),
+                    'LR_rfisher_lambda_min':     _fmt(lr_m.get('fisher_lambda_min', math.nan)),
+                    'LR_rfisher_lambda_cond':    _fmt(lr_m.get('fisher_lambda_cond', math.nan)),
+                    'LR_rfisher_det':            _fmt(lr_m.get('fisher_det', math.nan)),
+                    'LR_rfisher_identifiable':   lr_m.get('fisher_identifiable', 'nan'),
                 })
             if has_SR and not sr_platform_redundant:
                 sr_m = metrics['SR']
                 row.update({
-                    'SR_rJacobi_sigma_min_pos':      _fmt(sr_m.get('sigma_min', math.nan)),
-                    'SR_rJacobi_k_value':    _fmt(sr_m.get('k_value', math.nan)),
-                    'SR_rfisher_lambda_min': _fmt(sr_m.get('fisher_lambda_min', math.nan)),
-                    'SR_rfisher_cond':       _fmt(sr_m.get('fisher_cond', math.nan)),
-                    'SR_rfisher_det':        _fmt(sr_m.get('fisher_det', math.nan)),
-                    'SR_rfisher_identifiable': sr_m.get('fisher_identifiable', 'nan'),
+                    'SR_rJacobi_sigma_min_pos':  _fmt(sr_m.get('sigma_min', math.nan)),
+                    'SR_rJacobi_k_value':        _fmt(sr_m.get('k_value', math.nan)),
+                    'SR_rfisher_lambda_min':     _fmt(sr_m.get('fisher_lambda_min', math.nan)),
+                    'SR_rfisher_lambda_cond':    _fmt(sr_m.get('fisher_lambda_cond', math.nan)),
+                    'SR_rfisher_det':            _fmt(sr_m.get('fisher_det', math.nan)),
+                    'SR_rfisher_identifiable':   sr_m.get('fisher_identifiable', 'nan'),
                 })
             # Hybrid 放最后
             if has_Hybrid:
                 h = metrics['Hybrid']
                 row.update({
-                    'Hybrid_rJacobi_sigma_min_pos':   _fmt(h.get('sigma_min', math.nan)),
-                    'Hybrid_rJacobi_k_value': _fmt(h.get('k_value', math.nan)),
-                    'Hybrid_rfisher_lambda_min': _fmt(h.get('fisher_lambda_min', math.nan)),
-                    'Hybrid_rfisher_cond':       _fmt(h.get('fisher_cond', math.nan)),
-                    'Hybrid_rfisher_det':        _fmt(h.get('fisher_det', math.nan)),
-                    'Hybrid_rfisher_identifiable': h.get('fisher_identifiable', 'nan'),
+                    'Hybrid_rJacobi_sigma_min_pos':  _fmt(h.get('sigma_min', math.nan)),
+                    'Hybrid_rJacobi_k_value':        _fmt(h.get('k_value', math.nan)),
+                    'Hybrid_rfisher_lambda_min':     _fmt(h.get('fisher_lambda_min', math.nan)),
+                    'Hybrid_rfisher_lambda_cond':    _fmt(h.get('fisher_lambda_cond', math.nan)),
+                    'Hybrid_rfisher_det':            _fmt(h.get('fisher_det', math.nan)),
+                    'Hybrid_rfisher_identifiable':   h.get('fisher_identifiable', 'nan'),
                 })
 
         # ---- 收集 per-isoform SE / CI 行 ----
