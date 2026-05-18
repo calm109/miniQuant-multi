@@ -118,12 +118,19 @@ def _metrics_from_Fisher(F_tan):
                             0 for non-identifiable matrices, actual value otherwise.
       fisher_identifiable : True if F_tan is positive definite (all eigenvalues
                             >= _FISHER_EIG_TOL), else False.
-      fisher_det          : det(F_tan)  — D-optimality metric; 0 when not PD.
+      fisher_det          : log10|det(F_tan)| — D-optimality metric in log10 scale;
+                            -inf when singular; nan on numerical sign error.
     """
     eigvals = np.linalg.eigvalsh(F_tan)          # ascending order
     eigvals_clipped = np.maximum(eigvals, 0.0)    # PSD guarantee; clip fp negatives
     lambda_max = float(eigvals_clipped[-1])
-    fisher_det = float(np.linalg.det(F_tan))
+    sign, logabsdet = np.linalg.slogdet(F_tan)
+    if sign > 0:
+        fisher_det = float(logabsdet / math.log(10))   # log10|det|
+    elif sign == 0:
+        fisher_det = float('-inf')
+    else:
+        fisher_det = math.nan   # sign < 0: fp overflow artifact for PSD matrix
     # eigenvalues < _FISHER_EIG_TOL are treated as 0; lambda_min = 0 for non-identifiable
     thresholded = np.where(eigvals_clipped < _FISHER_EIG_TOL, 0.0, eigvals_clipped)
     lambda_min = float(thresholded[0])
@@ -273,7 +280,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
                 result[f'LR_{k+1}'] = {
                     'k_orig': k_orig_k,
                     'k_value': kv_k, 'sigma_max': sm_k, 'sigma_min': smi_k,
-                    'fisher_lambda_cond': fc_k, 'fisher_lambda_min': flmin_k,
+                    'fisher_lambda_cond': flc_k, 'fisher_lambda_min': flmin_k,
                     'fisher_identifiable': fi_k, 'fisher_det': fd_k,
                     'se_ci': _compute_se_ci(F_Lk, B, theta_hat_em),
                 }
@@ -283,7 +290,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         flc_LR, flmin_LR, fi_LR, fd_LR = _metrics_from_Fisher(F_L)
         result['LR'].update({
             'k_value': k_LR, 'sigma_max': smax_LR, 'sigma_min': smin_LR,
-            'fisher_lambda_cond': fc_LR, 'fisher_lambda_min': flmin_LR,
+            'fisher_lambda_cond': flc_LR, 'fisher_lambda_min': flmin_LR,
             'fisher_identifiable': fi_LR, 'fisher_det': fd_LR,
             'se_ci': _compute_se_ci(F_L, B, theta_hat_em),
         })
@@ -317,7 +324,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
                 result[f'SR_{k+1}'] = {
                     'k_orig': k_orig_k,
                     'k_value': kv_k, 'sigma_max': sm_k, 'sigma_min': smi_k,
-                    'fisher_lambda_cond': fc_k, 'fisher_lambda_min': fsmin_k,
+                    'fisher_lambda_cond': flc_k, 'fisher_lambda_min': fsmin_k,
                     'fisher_identifiable': fi_k, 'fisher_det': fd_k,
                     'se_ci': _compute_se_ci(F_Sk, B, theta_hat_em),
                 }
@@ -327,7 +334,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         flc_SR, fsmin_SR, fi_SR, fd_SR = _metrics_from_Fisher(F_S)
         result['SR'].update({
             'k_value': k_SR, 'sigma_max': smax_SR, 'sigma_min': smin_SR,
-            'fisher_lambda_cond': fc_SR, 'fisher_lambda_min': fsmin_SR,
+            'fisher_lambda_cond': flc_SR, 'fisher_lambda_min': fsmin_SR,
             'fisher_identifiable': fi_SR, 'fisher_det': fd_SR,
             'se_ci': _compute_se_ci(F_S, B, theta_hat_em),
         })
@@ -342,7 +349,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         flc_H, fhmin_H, fi_H, fd_H = _metrics_from_Fisher(F_H)
         result['Hybrid'] = {
             'k_value': k_H, 'sigma_max': smax_H, 'sigma_min': smin_H,
-            'fisher_lambda_cond': fc_H, 'fisher_lambda_min': fhmin_H,
+            'fisher_lambda_cond': flc_H, 'fisher_lambda_min': fhmin_H,
             'fisher_identifiable': fi_H, 'fisher_det': fd_H,
             'se_ci': _compute_se_ci(F_H, B, theta_hat_em),
         }
