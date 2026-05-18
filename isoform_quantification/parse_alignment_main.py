@@ -130,7 +130,10 @@ def get_aln_line_marker(alignment_file_path,threads):
         chunksize += 1
     aln_line_marker = []
     for i in range(actual_threads):
-        aln_line_marker.append((line_offset[i*chunksize],chunksize))
+        start = i * chunksize
+        if start >= num_aln_lines:
+            break
+        aln_line_marker.append((line_offset[start], min(chunksize, num_aln_lines - start)))
     return aln_line_marker
 
 def parse_alignment(alignment_file_path,READ_JUNC_MIN_MAP_LEN,gene_points_dict,gene_range,gene_interval_tree_dict,gene_regions_dict,genes_regions_len_dict,gene_isoforms_length_dict,long_read,filtering,threads):

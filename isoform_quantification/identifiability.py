@@ -118,19 +118,19 @@ def _metrics_from_Fisher(F_tan):
                             0 for non-identifiable matrices, actual value otherwise.
       fisher_identifiable : True if F_tan is positive definite (all eigenvalues
                             >= _FISHER_EIG_TOL), else False.
-      fisher_det          : log10|det(F_tan)| — D-optimality metric in log10 scale;
-                            -inf when singular; nan on numerical sign error.
+      fisher_det          : log10(|det(F_tan)| + 1) — D-optimality metric in log10 scale;
+                            0 when singular (det=0); nan on numerical sign error.
     """
     eigvals = np.linalg.eigvalsh(F_tan)          # ascending order
     eigvals_clipped = np.maximum(eigvals, 0.0)    # PSD guarantee; clip fp negatives
     lambda_max = float(eigvals_clipped[-1])
     sign, logabsdet = np.linalg.slogdet(F_tan)
-    if sign > 0:
-        fisher_det = float(logabsdet / math.log(10))   # log10|det|
-    elif sign == 0:
-        fisher_det = float('-inf')
-    else:
+    if sign < 0:
         fisher_det = math.nan   # sign < 0: fp overflow artifact for PSD matrix
+    else:
+        # log10(|det| + 1); logaddexp(logabsdet, 0) = ln(exp(logabsdet)+1) stably
+        # sign=0 → logabsdet=-inf → logaddexp(-inf,0)=0 → fisher_det=0
+        fisher_det = float(np.logaddexp(logabsdet, 0.0) / math.log(10))
     # eigenvalues < _FISHER_EIG_TOL are treated as 0; lambda_min = 0 for non-identifiable
     thresholded = np.where(eigvals_clipped < _FISHER_EIG_TOL, 0.0, eigvals_clipped)
     lambda_min = float(thresholded[0])
