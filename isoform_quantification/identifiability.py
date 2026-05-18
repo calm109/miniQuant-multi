@@ -104,7 +104,7 @@ def _metrics_from_Jtan(J_tan):
     return k_value, sigma_max, sigma_min_pos
 
 
-_FISHER_EIG_TOL = 1e-10   # eigenvalue threshold for positive-definiteness
+_FISHER_EIG_TOL = 1e-5   # eigenvalue threshold for positive-definiteness
 
 def _metrics_from_Fisher(F_tan):
     """
@@ -112,7 +112,7 @@ def _metrics_from_Fisher(F_tan):
     Fisher matrix F_tan (symmetric, (T-1) x (T-1)).
 
     Returns (fisher_lambda_cond, lambda_min, fisher_identifiable, fisher_det):
-      fisher_lambda_cond  : lambda_max / lambda_min  (nan if lambda_min == 0)
+      fisher_lambda_cond : log10(lambda_max / lambda_min)  (nan if lambda_min == 0)
       lambda_min          : smallest eigenvalue thresholded at _FISHER_EIG_TOL;
                             eigenvalues < _FISHER_EIG_TOL are set to 0.
                             0 for non-identifiable matrices, actual value otherwise.
@@ -127,7 +127,7 @@ def _metrics_from_Fisher(F_tan):
     # eigenvalues < _FISHER_EIG_TOL are treated as 0; lambda_min = 0 for non-identifiable
     thresholded = np.where(eigvals_clipped < _FISHER_EIG_TOL, 0.0, eigvals_clipped)
     lambda_min = float(thresholded[0])
-    fisher_lambda_cond = lambda_max / lambda_min if lambda_min > 0 else math.nan
+    fisher_lambda_cond = math.log10(lambda_max / lambda_min) if lambda_min > 0 else math.nan
     is_identifiable = bool(lambda_min > 0)   # positive definite: lambda_min > 0 iff all eigenvalues >= _FISHER_EIG_TOL
     return fisher_lambda_cond, lambda_min, is_identifiable, fisher_det
 
@@ -269,7 +269,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
                 cond_k = lr_md.get('condition_number', (math.nan,) * 4)
                 k_orig_k = float(cond_k[2]) if cond_k[2] is not None else math.nan
                 kv_k, sm_k, smi_k = _metrics_from_Jtan(J_Lk)
-                fc_k, flmin_k, fi_k, fd_k = _metrics_from_Fisher(F_Lk)
+                flc_k, flmin_k, fi_k, fd_k = _metrics_from_Fisher(F_Lk)
                 result[f'LR_{k+1}'] = {
                     'k_orig': k_orig_k,
                     'k_value': kv_k, 'sigma_max': sm_k, 'sigma_min': smi_k,
@@ -280,7 +280,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         # 合并 LR 结果
         J_L = np.vstack(J_L_list)
         k_LR, smax_LR, smin_LR = _metrics_from_Jtan(J_L)
-        fc_LR, flmin_LR, fi_LR, fd_LR = _metrics_from_Fisher(F_L)
+        flc_LR, flmin_LR, fi_LR, fd_LR = _metrics_from_Fisher(F_L)
         result['LR'].update({
             'k_value': k_LR, 'sigma_max': smax_LR, 'sigma_min': smin_LR,
             'fisher_lambda_cond': fc_LR, 'fisher_lambda_min': flmin_LR,
@@ -313,7 +313,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
                 cond_k = sr_md.get('condition_number', (math.nan,) * 4)
                 k_orig_k = float(cond_k[2]) if cond_k[2] is not None else math.nan
                 kv_k, sm_k, smi_k = _metrics_from_Jtan(J_Sk)
-                fc_k, fsmin_k, fi_k, fd_k = _metrics_from_Fisher(F_Sk)
+                flc_k, fsmin_k, fi_k, fd_k = _metrics_from_Fisher(F_Sk)
                 result[f'SR_{k+1}'] = {
                     'k_orig': k_orig_k,
                     'k_value': kv_k, 'sigma_max': sm_k, 'sigma_min': smi_k,
@@ -324,7 +324,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         # 合并 SR 结果
         J_S = np.vstack(J_S_list)
         k_SR, smax_SR, smin_SR = _metrics_from_Jtan(J_S)
-        fc_SR, fsmin_SR, fi_SR, fd_SR = _metrics_from_Fisher(F_S)
+        flc_SR, fsmin_SR, fi_SR, fd_SR = _metrics_from_Fisher(F_S)
         result['SR'].update({
             'k_value': k_SR, 'sigma_max': smax_SR, 'sigma_min': smin_SR,
             'fisher_lambda_cond': fc_SR, 'fisher_lambda_min': fsmin_SR,
@@ -339,7 +339,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         J_H = np.vstack(all_J)
         k_H, smax_H, smin_H = _metrics_from_Jtan(J_H)
         F_H = F_L + F_S  # F_L/F_S 均从零初始化，无该平台时保持零矩阵
-        fc_H, fhmin_H, fi_H, fd_H = _metrics_from_Fisher(F_H)
+        flc_H, fhmin_H, fi_H, fd_H = _metrics_from_Fisher(F_H)
         result['Hybrid'] = {
             'k_value': k_H, 'sigma_max': smax_H, 'sigma_min': smin_H,
             'fisher_lambda_cond': fc_H, 'fisher_lambda_min': fhmin_H,
