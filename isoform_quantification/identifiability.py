@@ -38,10 +38,17 @@ def compute_tangent_basis(T):
     """
     Return a T x (T-1) matrix B whose columns form an orthonormal basis
     for the tangent space {v in R^T : 1^T v = 0}.
-    Uses the right singular vectors of the all-ones row.
+    Uses the Helmert contrast matrix (closed-form, unique):
+        b_k = 1/sqrt(k(k+1)) * (1,...,1, -k, 0,...,0),  k = 1,...,T-1
+    The choice of basis does not affect any computed metric (eigenvalues,
+    condition number, SE/CI) because all quantities are invariant under
+    orthogonal rotation within the tangent space.
     """
-    _, _, Vt = np.linalg.svd(np.ones((1, T)))
-    return Vt[1:].T  # shape (T, T-1)
+    B = np.zeros((T, T - 1))
+    for k in range(1, T):
+        B[:k, k-1] = 1.0 / np.sqrt(k * (k + 1))
+        B[k,  k-1] = -k  / np.sqrt(k * (k + 1))
+    return B  # shape (T, T-1), orthonormal columns
 
 
 # ---------------------------------------------------------------------------
