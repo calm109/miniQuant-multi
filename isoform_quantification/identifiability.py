@@ -48,22 +48,13 @@ def compute_tangent_basis(T):
 # Step 2: SR isoform effective lengths
 # ---------------------------------------------------------------------------
 
-def compute_isoform_eff_len_sr(A_S, region_eff_length_dict, region_names_indics):
+def compute_isoform_eff_len_sr(isoform_lengths, sr_read_len):
     """
     Compute SR isoform effective length for each isoform t:
-        l_tilde_t = sum_{m: A_S[m,t] > 0} eff_len(m)
-    Needed for the phi transformation Jacobian.
+        l_tilde_t = max(l_t - r + 1, 1)
+    where l_t is the transcript length and r is the SR read length.
     """
-    T = A_S.shape[1]
-    l_tilde = np.zeros(T)
-    for region, eff_len in region_eff_length_dict.items():
-        r_idx = region_names_indics.get(region)
-        if r_idx is None:
-            continue
-        mask = A_S[r_idx, :] > 0          # which isoforms cover this region
-        l_tilde[mask] += eff_len
-    l_tilde[l_tilde == 0] = 1.0           # guard against zero (single-region edge case)
-    return l_tilde
+    return np.maximum(isoform_lengths - sr_read_len + 1, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +139,9 @@ _Z_95 = 1.959964   # z_{0.975} for 95% CI
 def _compute_se_ci(F_tan, B, theta_hat, gamma=0.05):
     """
     Compute per-isoform SE and truncated Wald CI via the Moore-Penrose pseudoinverse.
+    When F_tan is positive definite (invertible), the pseudoinverse equals the regular
+    inverse and all isoforms receive finite SE; the pseudoinverse formulation is used
+    uniformly for numerical stability and to handle the singular case without branching.
 
     Computes the pseudoinverse covariance:
         Sigma_theta^dagger = B @ F_tan^dagger @ B.T
@@ -302,7 +296,7 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
     for sr_ref_md, n_sr in zip(sr_ref_mds, n_srs):
         A_S = sr_ref_md['isoform_region_matrix']
         l_tilde = compute_isoform_eff_len_sr(
-            A_S, sr_ref_md['region_eff_length_dict'], sr_ref_md['region_names_indics'])
+            sr_ref_md['isoform_lengths'], sr_ref_md['sr_read_len'])
         Jphi = compute_Jphi(theta_hat_em, l_tilde)
         J_Sk = A_S @ Jphi @ B
         J_S_list.append(J_Sk)

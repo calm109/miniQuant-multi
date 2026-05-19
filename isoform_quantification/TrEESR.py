@@ -56,21 +56,21 @@ def TrEESR(ref_file_path,output_path,short_read_alignment_file_path,long_read_al
                 sr_read_count, sr_read_len, num_SRs = parse_alignment(sr_sam, READ_JUNC_MIN_MAP_LEN, gene_points_dict,
                     gene_range, gene_interval_tree_dict, SR_gene_regions_dict, SR_genes_regions_len_dict, gene_isoforms_length_dict, False, False, threads)
                 config.READ_LEN = sr_read_len
-                sr_matrix = generate_all_feature_matrix_short_read(gene_isoforms_dict, SR_gene_regions_dict, sr_read_count, sr_read_len, SR_genes_regions_len_dict, num_SRs, False)
+                sr_matrix = generate_all_feature_matrix_short_read(gene_isoforms_dict, SR_gene_regions_dict, sr_read_count, sr_read_len, SR_genes_regions_len_dict, num_SRs, False, gene_isoforms_length_dict=gene_isoforms_length_dict)
                 # 额外计算理论 A 矩阵（与 read_length 模式相同的区域过滤）用于可识别性分析
                 # 注意：eff_length 计算需要 inner region 长度，因此传入完整的 SR_genes_regions_len_dict
                 if sr_theoretical_matrix_dict is None:
                     theo_SR_regions_dict, _ = filter_regions_read_length(
                         SR_gene_regions_dict, gene_points_dict, SR_genes_regions_len_dict,
                         READ_JUNC_MIN_MAP_LEN, sr_read_len, sr_read_len)
-                    sr_theoretical_matrix_dict = calculate_all_condition_number(gene_isoforms_dict, theo_SR_regions_dict, SR_genes_regions_len_dict, sr_read_len, allow_multi_exons=False)
+                    sr_theoretical_matrix_dict = calculate_all_condition_number(gene_isoforms_dict, theo_SR_regions_dict, SR_genes_regions_len_dict, sr_read_len, allow_multi_exons=False, gene_isoforms_length_dict=gene_isoforms_length_dict)
             else:
-                sr_matrix = calculate_all_condition_number(gene_isoforms_dict, SR_gene_regions_dict, SR_genes_regions_len_dict, sr_read_len, allow_multi_exons=False)
+                sr_matrix = calculate_all_condition_number(gene_isoforms_dict, SR_gene_regions_dict, SR_genes_regions_len_dict, sr_read_len, allow_multi_exons=False, gene_isoforms_length_dict=gene_isoforms_length_dict)
             sr_matrix_list.append(sr_matrix)
         short_read_gene_matrix_dict = sr_matrix_list if len(sr_matrix_list) > 1 else sr_matrix_list[0]
     else:
         SR_read_len = READ_LEN
-        short_read_gene_matrix_dict = calculate_all_condition_number(gene_isoforms_dict,SR_gene_regions_dict,SR_genes_regions_len_dict,SR_read_len,allow_multi_exons=False)
+        short_read_gene_matrix_dict = calculate_all_condition_number(gene_isoforms_dict,SR_gene_regions_dict,SR_genes_regions_len_dict,SR_read_len,allow_multi_exons=False,gene_isoforms_length_dict=gene_isoforms_length_dict)
     # LR A 矩阵：每个 LR SAM 各自构建独立矩阵
     if lr_sam_list:
         lr_matrix_list = []

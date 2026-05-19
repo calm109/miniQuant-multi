@@ -12,8 +12,8 @@ def construct_index(region_names,isoform_names):
     region_names_indics = {x:i for i,x in enumerate(region_names)}
     isoform_names_indics = {x:i for i,x in enumerate(isoform_names)}
     return region_names_indics,isoform_names_indics
-
-def construct_isoform_region_matrix(isoform_region_dict,region_names_indics,isoform_names_indics,normalize_A=True):
+# 构造异构体-区域矩阵，其中每行是一个区域，每列是一个异构体，如果区域包含在异构体中，则值为1，否则为0
+def construct_isoform_region_matrix(isoform_region_dict,region_names_indics,isoform_names_indics,normalize_A=True): 
     isoform_region_matrix = np.zeros((len(region_names_indics),len(isoform_names_indics)))
     for region_name in isoform_region_dict:
         for isoform_name in isoform_region_dict[region_name]:
@@ -99,9 +99,11 @@ def get_condition_number(isoform_region_matrix):
     svd_val_min = 0
     if (rank == multiply_transpose_matrix.shape[0]):
         svd_val_min = np.sqrt(singular_values[-1])
-        kvalue = svd_val_max / svd_val_min
+        # full rank
+        kvalue = (svd_val_max - svd_val_min)/svd_val_max
     else:
-        kvalue = svd_val_max / svd_val_pos_min
+        # not full rank
+        kvalue =  (svd_val_max/svd_val_pos_min)
     
     # Calculate condition number
     regular_condition_number = divide_by_zero(svd_val_max,svd_val_min)
@@ -165,7 +167,7 @@ def cal_weight_region(short_read_gene_matrix_dict):
 
 #     return filtered_regions_dict
 
-def calculate_all_condition_number(gene_isoforms_dict,gene_regions_dict,gene_region_len_dict,SR_read_len,allow_multi_exons):
+def calculate_all_condition_number(gene_isoforms_dict,gene_regions_dict,gene_region_len_dict,SR_read_len,allow_multi_exons,gene_isoforms_length_dict=None):
     gene_matrix_dict = dict()
     for chr_name in gene_isoforms_dict:
         gene_matrix_dict[chr_name] = dict()
@@ -187,6 +189,14 @@ def calculate_all_condition_number(gene_isoforms_dict,gene_regions_dict,gene_reg
                     sum_A[sum_A==0] = 1
                     gene_matrix_dict[chr_name][gene_name]['isoform_region_matrix'] = gene_matrix_dict[chr_name][gene_name]['isoform_region_matrix']/sum_A
                 gene_matrix_dict[chr_name][gene_name]['condition_number'] = get_condition_number(gene_matrix_dict[chr_name][gene_name]['isoform_region_matrix'])
+            if gene_isoforms_length_dict is not None:
+                iso_len_gene = gene_isoforms_length_dict[chr_name][gene_name]
+                iso_indics = gene_matrix_dict[chr_name][gene_name]['isoform_names_indics']
+                lengths = np.zeros(len(iso_indics))
+                for iso, idx in iso_indics.items():
+                    lengths[idx] = iso_len_gene.get(iso, 0)
+                gene_matrix_dict[chr_name][gene_name]['isoform_lengths'] = lengths
+                gene_matrix_dict[chr_name][gene_name]['sr_read_len'] = float(SR_read_len)
     return gene_matrix_dict
 def calculate_all_condition_number_long_read(gene_isoforms_dict,gene_regions_dict,allow_multi_exons):
     gene_matrix_dict = dict()
@@ -202,7 +212,7 @@ def calculate_all_condition_number_long_read(gene_isoforms_dict,gene_regions_dic
             #     region_isoform_dict = filter_regions(gene_regions_dict[chr_name][gene_name],long_read=True)
             gene_matrix_dict[chr_name][gene_name] = calculate_condition_number(region_isoform_dict,isoform_names,config.normalize_sr_A)
     return gene_matrix_dict
-def generate_all_feature_matrix_short_read(gene_isoforms_dict,gene_regions_dict,gene_regions_read_count,SR_read_len,gene_region_len_dict,num_SRs,normalize_A=True):
+def generate_all_feature_matrix_short_read(gene_isoforms_dict,gene_regions_dict,gene_regions_read_count,SR_read_len,gene_region_len_dict,num_SRs,normalize_A=True,gene_isoforms_length_dict=None):
     gene_matrix_dict = dict()
     for chr_name in gene_isoforms_dict:
         gene_matrix_dict[chr_name] = dict()
@@ -262,6 +272,14 @@ def generate_all_feature_matrix_short_read(gene_isoforms_dict,gene_regions_dict,
             for region in region_read_count_dict:
                 num_SRs_mapped_gene += region_read_count_dict[region]
             matrix_dict['num_SRs_mapped_gene'] = num_SRs_mapped_gene
+            if gene_isoforms_length_dict is not None:
+                iso_len_gene = gene_isoforms_length_dict[chr_name][gene_name]
+                iso_indics = matrix_dict['isoform_names_indics']
+                lengths = np.zeros(len(iso_indics))
+                for iso, idx in iso_indics.items():
+                    lengths[idx] = iso_len_gene.get(iso, 0)
+                matrix_dict['isoform_lengths'] = lengths
+                matrix_dict['sr_read_len'] = float(SR_read_len)
             gene_matrix_dict[chr_name][gene_name] = matrix_dict
 
     return gene_matrix_dict
