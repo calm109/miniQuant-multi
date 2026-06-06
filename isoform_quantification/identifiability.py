@@ -116,19 +116,20 @@ def _metrics_from_Fisher(F_tan):
                             0 for non-identifiable matrices, actual value otherwise.
       fisher_identifiable : True if F_tan is positive definite (all eigenvalues
                             >= _FISHER_EIG_TOL), else False.
-      fisher_det          : log10(|det(F_tan)| + 1) — D-optimality metric in log10 scale;
-                            0 when singular (det=0); nan on numerical sign error.
+      fisher_det          : log10(|det(F_tan)|^(1/T)) — D-optimality metric (log10 of
+                            T-th root of absolute determinant,
+                            T = number of isoforms = F_tan.shape[0]+1);
+                            nan when singular (det=0) or on numerical sign error.
     """
     eigvals = np.linalg.eigvalsh(F_tan)          # ascending order
     eigvals_clipped = np.maximum(eigvals, 0.0)    # PSD guarantee; clip fp negatives
     lambda_max = float(eigvals_clipped[-1])
     sign, logabsdet = np.linalg.slogdet(F_tan)
-    if sign < 0:
-        fisher_det = math.nan   # sign < 0: fp overflow artifact for PSD matrix
+    T = F_tan.shape[0] + 1                        # number of isoforms
+    if sign <= 0:
+        fisher_det = math.nan   # det <= 0: singular or fp artifact
     else:
-        # log10(|det| + 1); logaddexp(logabsdet, 0) = ln(exp(logabsdet)+1) stably
-        # sign=0 → logabsdet=-inf → logaddexp(-inf,0)=0 → fisher_det=0
-        fisher_det = float(np.logaddexp(logabsdet, 0.0) / math.log(10))
+        fisher_det = float(logabsdet / (T * math.log(10)))
     # eigenvalues < _FISHER_EIG_TOL are treated as 0; lambda_min = 0 for non-identifiable
     thresholded = np.where(eigvals_clipped < _FISHER_EIG_TOL, 0.0, eigvals_clipped)
     lambda_min = float(thresholded[0])
@@ -467,21 +468,34 @@ def _build_theta_hat_em(gene_name, isoform_names_indics, gene_isoform_tpm):
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_input, sr_theoretical_input=None, threads=1):
+def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_input,
+                                        sr_theoretical_input=None, threads=1,
+                                        _preloaded_tpm=None, _preloaded_counts=None,
+                                        scale_by_N=True):
     """
     Compute identifiability metrics for every gene and write identifiability.tsv.
 
     Parameters
     ----------
-    output_path      : str  directory to write identifiability.tsv
-    sr_matrix_input  : dict or list of dicts  (chr -> gene -> matrix_dict) for SR
-    lr_matrix_input  : dict or list of dicts  (chr -> gene -> matrix_dict) for LR
+    output_path          : str   directory to write identifiability.tsv
+    sr_matrix_input      : dict or list of dicts  (chr -> gene -> matrix_dict) for SR
+    lr_matrix_input      : dict or list of dicts  (chr -> gene -> matrix_dict) for LR;
+                           pass {} to skip LR entirely.
     sr_theoretical_input : dict or None  (chr -> gene -> theoretical matrix_dict for SR)
-    
+    _preloaded_tpm       : dict or None  {gene_name: {isoform_name: abundance}} —
+                           when provided, bypasses reading expression_isoform.out /
+                           Isoform_abundance.out from disk (used by --identi_data mode).
+    _preloaded_counts    : dict or None  {gene_name: ([n_lr_list], [n_sr_list])} —
+                           when provided, bypasses reading gene read counts from disk.
+    scale_by_N           : bool  if True (default), Fisher matrices are scaled by per-gene
+                           read counts N; if False, N=1 for all samples and results are
+                           written to identifiability_no_N.tsv / isoform_SE_CI_no_N.tsv.
+
     This function is read-only with respect to the input dicts and does NOT
     affect quantification results.
     """
-    print('[INFO] Computing identifiability metrics...', flush=True)
+    suffix = '' if scale_by_N else '_no_N'
+    print(f'[INFO] Computing identifiability metrics (scale_by_N={scale_by_N})...', flush=True)
 
     sr_list = sr_matrix_input if isinstance(sr_matrix_input, list) else [sr_matrix_input]
     lr_list = lr_matrix_input if isinstance(lr_matrix_input, list) else [lr_matrix_input]
@@ -492,15 +506,25 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
     sr_theoretical_all = sr_theoretical_input
 
     # Load EM quantification results if available
-    gene_isoform_tpm = _load_em_tpm(output_path)
-    has_em = gene_isoform_tpm is not None
-    if has_em:
-        print('[INFO] expression_isoform.out detected; using EM theta for restricted Jacobian.', flush=True)
+    if _preloaded_tpm is not None:
+        gene_isoform_tpm = _preloaded_tpm
+        has_em = True
+        print('[INFO] Using pre-loaded TPM data from feature_data.', flush=True)
     else:
-        print('[INFO] expression_isoform.out not found; outputting k_orig only.', flush=True)
+        gene_isoform_tpm = _load_em_tpm(output_path)
+        has_em = gene_isoform_tpm is not None
+        if has_em:
+            print('[INFO] expression_isoform.out detected; using EM theta for restricted Jacobian.', flush=True)
+        else:
+            print('[INFO] expression_isoform.out not found; outputting k_orig only.', flush=True)
 
     # Load per-gene read counts for Fisher matrix scaling (N_L, N_S)
-    gene_read_counts = _load_gene_read_counts(output_path) if has_em else None
+    if not scale_by_N:
+        gene_read_counts = None   # N=1 for all samples; skip loading
+    elif _preloaded_counts is not None:
+        gene_read_counts = _preloaded_counts
+    else:
+        gene_read_counts = _load_gene_read_counts(output_path) if has_em else None
 
     def _fmt(v):
         return 'nan' if math.isnan(v) or math.isinf(v) else f'{v:.6g}'
@@ -656,6 +680,13 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
                     'Hybrid_rfisher_det':            _fmt(h.get('fisher_det', math.nan)),
                     'Hybrid_rfisher_identifiable':   h.get('fisher_identifiable', 'nan'),
                 })
+        elif is_zero_expr:
+            if has_LR:
+                row['LR_rfisher_identifiable'] = False
+            if has_SR:
+                row['SR_rfisher_identifiable'] = False
+            if len(lr_mds_gene) + len(sr_mds_gene) > 1:
+                row['Hybrid_rfisher_identifiable'] = False
 
         # ---- 收集 per-isoform SE / CI 行 ----
         se_ci_rows_gene = []
@@ -696,15 +727,14 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
                         'gene':      gene_name,
                         'chr':       chr_name,
                         'isoform':   iso_name,
-                        'theta_hat': '0' if is_zero_expr else 'null',
+                        'theta_hat': 'null',
                     })
 
-        return row, se_ci_rows_gene, is_zero_expr
+        return row, se_ci_rows_gene
 
     # ---- 并行计算每个基因 ----
     rows = []
     se_ci_rows = []
-    zero_expression_gene_keys = set()
     gene_keys_sorted = sorted(all_gene_keys)
     results_dict = {}
     with ThreadPoolExecutor(max_workers=max(1, threads)) as executor:
@@ -722,13 +752,11 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
     for key in gene_keys_sorted:
         if key not in results_dict:
             continue
-        row, se_ci_rows_gene, is_zero_expr = results_dict[key]
-        if is_zero_expr:
-            zero_expression_gene_keys.add(key)
+        row, se_ci_rows_gene = results_dict[key]
         rows.append(row)
         se_ci_rows.extend(se_ci_rows_gene)
 
-    out_file = os.path.join(output_path, 'identifiability.tsv')
+    out_file = os.path.join(output_path, f'identifiability{suffix}.tsv')
     if rows:
         # Collect all fieldnames from all rows (union, preserving first-seen order)
         fieldnames = list(rows[0].keys())
@@ -740,15 +768,14 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
             writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\t', extrasaction='ignore')
             writer.writeheader()
             for r in rows:
-                is_zero = (r['chr'], r['gene']) in zero_expression_gene_keys
-                writer.writerow({k: r.get(k, 'zero' if is_zero else 'nan') for k in fieldnames})
+                writer.writerow({k: r.get(k, 'nan') for k in fieldnames})
         print(f'[INFO] Identifiability metrics written to {out_file} ({len(rows)} genes)',
               flush=True)
     else:
         print('[INFO] No genes with sufficient data for identifiability analysis.', flush=True)
 
     # ---- 写 isoform_SE_CI.tsv ----
-    se_ci_file = os.path.join(output_path, 'isoform_SE_CI.tsv')
+    se_ci_file = os.path.join(output_path, f'isoform_SE_CI{suffix}.tsv')
     if se_ci_rows:
         # 列名从实际行数据中动态收集（保留首次出现顺序）
         se_ci_fields = list(se_ci_rows[0].keys())
@@ -761,10 +788,98 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
                                     extrasaction='ignore')
             writer.writeheader()
             for r in se_ci_rows:
-                is_zero = (r['chr'], r['gene']) in zero_expression_gene_keys
-                fill = 'zero' if is_zero else 'null'
-                writer.writerow({k: r.get(k, fill) for k in se_ci_fields})
+                writer.writerow({k: r.get(k, 'null') for k in se_ci_fields})
         print(f'[INFO] Isoform SE/CI written to {se_ci_file} ({len(se_ci_rows)} isoforms)',
               flush=True)
     else:
         print('[INFO] No isoform SE/CI computed (no invertible Fisher matrix found).', flush=True)
+
+
+# ---------------------------------------------------------------------------
+# --identi_data mode: load feature_data.tsv
+# ---------------------------------------------------------------------------
+
+def load_feature_data(feature_data_path):
+    """
+    Parse feature_data.tsv (tab-separated) for the --identi_data interface.
+
+    Expected columns (header line is auto-detected and skipped):
+        1. transcript_name   – transcript identifier (must match GTF transcript_id)
+        2. gene_name         – gene identifier (must match GTF gene_id)
+        3. gene_count        – number of reads in the gene region (same value for
+                               all rows of the same gene; used as N for Fisher scaling)
+        4. relative_abundance – relative abundance of each transcript within its gene
+                               (non-negative; values across transcripts of the same gene
+                               should sum to 1, but any non-negative scale is accepted
+                               since the code re-normalises to sum → 1 per gene)
+        5. read_length       – integer read length used to construct matrix A
+                               (same for every row; used as SR read length r)
+
+    Returns
+    -------
+    gene_info : dict
+        { gene_name:
+            { 'transcripts' : [transcript_name, ...],         # ordered by file appearance
+              'count'        : int,                            # gene-level read count
+              'abundances'   : {transcript_name: float},      # relative abundance per transcript
+              'read_length'  : int                            # SR read length
+            }
+        }
+    global_read_length : int
+        The single read-length value shared by all rows (150 if file is empty).
+    """
+    gene_info = {}
+    global_read_length = None
+
+    with open(feature_data_path, 'r') as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.rstrip('\n')
+            if not line:
+                continue
+            parts = line.split('\t')
+            if len(parts) < 5:
+                continue
+            # Auto-skip a header row: col-5 must be numeric
+            try:
+                float(parts[4])
+            except ValueError:
+                if lineno == 1:
+                    continue          # skip header
+                raise ValueError(
+                    f'[ERROR] feature_data.tsv line {lineno}: '
+                    f'column 5 is not numeric ("{parts[4]}")')
+
+            transcript_name = parts[0].strip()
+            gene_name       = parts[1].strip()
+            try:
+                gene_count  = float(parts[2])
+            except ValueError:
+                gene_count  = 0.0
+            try:
+                abund       = float(parts[3])
+            except ValueError:
+                abund       = 0.0
+            try:
+                read_len    = int(float(parts[4]))
+            except ValueError:
+                read_len    = 150
+
+            if global_read_length is None:
+                global_read_length = read_len
+
+            if gene_name not in gene_info:
+                gene_info[gene_name] = {
+                    'transcripts': [],
+                    'count':       int(round(gene_count)),
+                    'abundances':  {},
+                    'read_length': read_len,
+                }
+            gene_info[gene_name]['transcripts'].append(transcript_name)
+            gene_info[gene_name]['abundances'][transcript_name] = abund
+
+    if global_read_length is None:
+        global_read_length = 150
+
+    print(f'[INFO] feature_data loaded: {len(gene_info)} genes, '
+          f'read_length={global_read_length}', flush=True)
+    return gene_info, global_read_length

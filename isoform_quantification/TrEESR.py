@@ -126,11 +126,120 @@ def TrEESR(ref_file_path,output_path,short_read_alignment_file_path,long_read_al
     sr_matrix_for_identifiability = short_read_gene_matrix_dict if sr_sam_list else None
     lr_matrix_for_identifiability = long_read_gene_matrix_dict if lr_sam_list else None
     compute_and_output_identifiability(output_path, sr_matrix_for_identifiability, lr_matrix_for_identifiability, sr_theoretical_matrix_dict, threads=threads)
+    compute_and_output_identifiability(output_path, sr_matrix_for_identifiability, lr_matrix_for_identifiability, sr_theoretical_matrix_dict, threads=threads, scale_by_N=False)
     ref_annotation_dict_list = [gene_exons_dict,gene_points_dict,gene_isoforms_dict,SR_gene_regions_dict,SR_genes_regions_len_dict,LR_gene_regions_dict,LR_genes_regions_len_dict,gene_isoforms_length_dict,raw_isoform_exons_dict,raw_gene_exons_dict]
     return gene_feature_dict
 def get_kvalues_dict(ref_file_path,threads,READ_LEN=150,READ_JUNC_MIN_MAP_LEN=10):
     gene_points_dict,gene_isoforms_dict,gene_regions_dict,genes_regions_len_dict,gene_isoforms_length_dict,raw_isoform_exons_dict = parse_reference_annotation(ref_file_path,threads,READ_LEN,READ_JUNC_MIN_MAP_LEN)
     long_read_gene_matrix_dict = calculate_all_condition_number(gene_isoforms_dict,gene_regions_dict,allow_multi_exons=True)
     return long_read_gene_matrix_dict
+
+
+# ---------------------------------------------------------------------------
+# --identi_data mode: compute identifiability from GTF + feature_data.tsv
+# ---------------------------------------------------------------------------
+
+def TrEESR_identi_data(ref_file_path, output_path, feature_data_path,
+                        sr_region_selection='read_length', threads=1,
+                        READ_JUNC_MIN_MAP_LEN=1):
+    """
+    Compute identifiability metrics from a GTF annotation and feature_data.tsv,
+    without requiring any SAM alignment files.
+
+    Parameters
+    ----------
+    ref_file_path       : str  path to GTF annotation file (-gtf)
+    output_path         : str  directory for output files (-o)
+    feature_data_path   : str  path to feature_data.tsv (--identi_data)
+    sr_region_selection : str  region filtering strategy [read_length|num_exons|real_data]
+    threads             : int
+    READ_JUNC_MIN_MAP_LEN : int
+
+    feature_data.tsv columns (tab-separated, header optional):
+        1. transcript_name   – must match GTF transcript_id
+        2. gene_name         – must match GTF gene_id
+        3. gene_count        – read count for the gene region (same for all rows of
+                               the same gene; used as N to scale the Fisher matrix)
+        4. relative_abundance – relative abundance of each transcript within its gene
+                               (should sum to 1 per gene; any non-negative scale is
+                               accepted since the code re-normalises per gene)
+        5. read_length       – integer SR read length; same for every row; used to
+                               build the effective-length-weighted A matrix
+
+    Outputs
+    -------
+    <output_path>/identifiability.tsv
+    <output_path>/isoform_SE_CI.tsv
+    """
+    from pathlib import Path
+    from identifiability import load_feature_data, compute_and_output_identifiability
+
+    Path(output_path).mkdir(parents=True, exist_ok=True)
+    # parse_annotation 内部会向 temp/machine_learning/ 写 gene_features.pkl，必须预先建目录
+    Path(f'{output_path}/temp/machine_learning/').mkdir(parents=True, exist_ok=True)
+
+    # ── Step 1: load feature_data.tsv ──────────────────────────────────────
+    gene_info, global_read_length = load_feature_data(feature_data_path)
+
+    # ── Step 2: parse GTF annotation ───────────────────────────────────────
+    print(f'[INFO] Parsing GTF annotation: {ref_file_path}', flush=True)
+    (gene_exons_dict, gene_points_dict, gene_isoforms_dict,
+     SR_gene_regions_dict, SR_genes_regions_len_dict,
+     LR_gene_regions_dict, LR_genes_regions_len_dict,
+     gene_isoforms_length_dict, raw_isoform_exons_dict,
+     raw_gene_exons_dict, same_structure_isoform_dict,
+     removed_gene_isoform_dict) = parse_reference_annotation(
+        ref_file_path, threads, global_read_length,
+        READ_JUNC_MIN_MAP_LEN, sr_region_selection)
+
+    # ── Step 3: build SR matrix dict (A matrix + isoform lengths + sr_read_len) ─
+    print(f'[INFO] Building SR matrix dict '
+          f'(read_length={global_read_length}, '
+          f'sr_region_selection={sr_region_selection})...', flush=True)
+    sr_matrix_dict = calculate_all_condition_number(
+        gene_isoforms_dict,
+        SR_gene_regions_dict,
+        SR_genes_regions_len_dict,
+        global_read_length,
+        allow_multi_exons=False,
+        gene_isoforms_length_dict=gene_isoforms_length_dict)
+
+    # ── Step 4: build pre-loaded TPM dict ──────────────────────────────────
+    #   Format expected by _build_theta_hat_em:
+    #   { gene_name: { isoform_name: abundance_value } }
+    #   Normalisation to sum→1 is done inside _build_theta_hat_em, so raw values are fine.
+    gene_isoform_tpm = {
+        gene: dict(info['abundances'])
+        for gene, info in gene_info.items()
+    }
+
+    # ── Step 5: build pre-loaded gene read counts ──────────────────────────
+    #   Format: { gene_name: (n_lr_list, n_sr_list) }
+    #   SR-only mode: n_lr_list=[], n_sr_list=[gene_count]
+    gene_read_counts = {
+        gene: ([], [max(info['count'], 1)])
+        for gene, info in gene_info.items()
+    }
+
+    # ── Step 6: run identifiability analysis ───────────────────────────────
+    compute_and_output_identifiability(
+        output_path=output_path,
+        sr_matrix_input=sr_matrix_dict,
+        lr_matrix_input={},           # no LR data in this mode
+        sr_theoretical_input=None,
+        threads=threads,
+        _preloaded_tpm=gene_isoform_tpm,
+        _preloaded_counts=gene_read_counts,
+    )
+    compute_and_output_identifiability(
+        output_path=output_path,
+        sr_matrix_input=sr_matrix_dict,
+        lr_matrix_input={},
+        sr_theoretical_input=None,
+        threads=threads,
+        _preloaded_tpm=gene_isoform_tpm,
+        _preloaded_counts=gene_read_counts,
+        scale_by_N=False,
+    )
 
 
