@@ -151,7 +151,7 @@ def parse_arguments():
     config.singular_values_tol = args.singular_values_tol
 
     if args.subparser_name in ['cal_identifiability','cal_K_value','TrEESR']:
-        print('[INFO] Calculate K values')
+        print('[INFO] Computing identifiability metrics')
         identi_data_path = getattr(args, 'identi_data', None)
         if identi_data_path is not None:
             # --identi_data mode: no SAM files needed

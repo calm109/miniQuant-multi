@@ -93,8 +93,11 @@ def _metrics_from_Jtan(J_tan):
     Returns (k_value, sigma_max, sigma_min_pos).
     """
     sv = np.linalg.svd(J_tan, compute_uv=False)
-    rank = np.linalg.matrix_rank(J_tan)
-    if rank == 0 or sv[0] == 0.0:
+    if len(sv) == 0 or sv[0] == 0.0:
+        return math.nan, math.nan, math.nan
+    tol = sv[0] * max(J_tan.shape) * np.finfo(sv.dtype).eps
+    rank = int(np.sum(sv > tol))
+    if rank == 0:
         return math.nan, math.nan, math.nan
     sigma_max = float(sv[0])
     sigma_min_pos = float(sv[rank - 1])
@@ -199,6 +202,62 @@ def _compute_se_ci(F_tan, B, theta_hat, gamma=0.05):
     return se, ci_lo, ci_hi
 
 
+def _fisher_metrics_and_se_ci(F_tan, B, theta_hat):
+    """
+    Combined replacement for _metrics_from_Fisher + _compute_se_ci.
+    Performs a single eigh decomposition instead of three separate calls
+    (eigvalsh, slogdet, eigh), halving the linear-algebra cost per (gene, platform).
+
+    Returns
+    -------
+    fisher_lambda_cond, lambda_min, is_identifiable, fisher_det : same as _metrics_from_Fisher
+    se_ci : (se, ci_lo, ci_hi) tuple,  same as _compute_se_ci
+    """
+    T_iso = B.shape[0]                                      # number of isoforms
+
+    # Single decomposition — replaces eigvalsh + slogdet + eigh
+    eigvals, eigvecs = np.linalg.eigh(F_tan)                # ascending order, symmetric
+    eigvals_clipped = np.maximum(eigvals, 0.0)              # PSD by construction; clip fp negatives
+
+    lambda_max = float(eigvals_clipped[-1])
+
+    # log det from eigenvalues (replaces slogdet; singular when any raw eigenvalue <= 0)
+    if np.any(eigvals <= 0.0):
+        fisher_det = math.nan
+    else:
+        fisher_det = float(np.sum(np.log(eigvals)) / (T_iso * math.log(10)))
+
+    thresholded = np.where(eigvals_clipped < _FISHER_EIG_TOL, 0.0, eigvals_clipped)
+    lambda_min = float(thresholded[0])
+    fisher_lambda_cond = math.log10(lambda_max / lambda_min) if lambda_min > 0 else math.nan
+    is_identifiable = bool(lambda_min > 0)
+
+    # SE/CI — reuses eigvals_clipped and eigvecs from the decomposition above
+    inv_eigvals = np.where(eigvals_clipped > _FISHER_EIG_TOL,
+                           1.0 / np.maximum(eigvals_clipped, _FISHER_EIG_TOL),
+                           0.0)
+    F_tan_pinv = eigvecs @ np.diag(inv_eigvals) @ eigvecs.T
+    Sigma_theta_pinv = B @ F_tan_pinv @ B.T
+    diag_var = np.diag(Sigma_theta_pinv)
+
+    null_mask = eigvals_clipped <= _FISHER_EIG_TOL
+    if np.any(null_mask):
+        null_vecs = eigvecs[:, null_mask]
+        BT = B.T
+        null_proj = np.sum((null_vecs.T @ BT) ** 2, axis=0)
+        b_norm_sq = np.sum(BT ** 2, axis=0)
+        is_null = null_proj / np.maximum(b_norm_sq, 1e-30) > 0
+    else:
+        is_null = np.zeros(T_iso, dtype=bool)
+
+    se = np.where(is_null, np.nan, np.sqrt(np.maximum(diag_var, 0.0)))
+    safe_se = np.where(is_null, 0.0, se)
+    ci_lo = np.where(is_null, np.nan, np.maximum(0.0, theta_hat - _Z_95 * safe_se))
+    ci_hi = np.where(is_null, np.nan, np.minimum(1.0, theta_hat + _Z_95 * safe_se))
+
+    return fisher_lambda_cond, lambda_min, is_identifiable, fisher_det, (se, ci_lo, ci_hi)
+
+
 # ---------------------------------------------------------------------------
 # Per-gene computation
 # ---------------------------------------------------------------------------
@@ -243,14 +302,11 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
     if T <= 1:
         return None
 
-    # ---- k_orig（取第一个样本的 SVD condition number） ----
     result = {}
     if has_lr:
-        cond_LR = lr_mds[0].get('condition_number', (math.nan,) * 4)
-        result['LR'] = {'k_orig': float(cond_LR[2]) if cond_LR[2] is not None else math.nan}
+        result['LR'] = {}
     if has_sr:
-        cond_SR = sr_ref_mds[0].get('condition_number', (math.nan,) * 4)
-        result['SR'] = {'k_orig': float(cond_SR[2]) if cond_SR[2] is not None else math.nan}
+        result['SR'] = {}
 
     if theta_hat_em is None:
         return result
@@ -258,14 +314,12 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
     B = compute_tangent_basis(T)
     _EPS = 1e-12
 
-    # ---- LR：各样本 Jacobian 堆叠，Fisher 加权求和 ----
-    J_L_list = []
+    # ---- LR：各样本计算 Fisher 矩阵，加权求和 ----
     F_L = np.zeros((T - 1, T - 1))
     F_L_list = []
     for lr_md, n_lr in zip(lr_mds, n_lrs):
         A_L = lr_md['isoform_region_matrix']
         J_Lk = A_L @ B
-        J_L_list.append(J_Lk)
         p_Lk = np.maximum(A_L @ theta_hat_em, _EPS)
         F_Lk = max(n_lr, 1) * (J_Lk.T @ ((1.0 / p_Lk)[:, None] * J_Lk))
         F_L += F_Lk
@@ -274,31 +328,22 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
     if has_lr:
         # 多样本时额外输出每个样本的单独指标
         if len(lr_mds) > 1:
-            for k, (lr_md, J_Lk, F_Lk) in enumerate(zip(lr_mds, J_L_list, F_L_list)):
-                cond_k = lr_md.get('condition_number', (math.nan,) * 4)
-                k_orig_k = float(cond_k[2]) if cond_k[2] is not None else math.nan
-                kv_k, sm_k, smi_k = _metrics_from_Jtan(J_Lk)
-                flc_k, flmin_k, fi_k, fd_k = _metrics_from_Fisher(F_Lk)
+            for k, F_Lk in enumerate(F_L_list):
+                flc_k, flmin_k, fi_k, fd_k, se_ci_k = _fisher_metrics_and_se_ci(F_Lk, B, theta_hat_em)
                 result[f'LR_{k+1}'] = {
-                    'k_orig': k_orig_k,
-                    'k_value': kv_k, 'sigma_max': sm_k, 'sigma_min': smi_k,
                     'fisher_lambda_cond': flc_k, 'fisher_lambda_min': flmin_k,
                     'fisher_identifiable': fi_k, 'fisher_det': fd_k,
-                    'se_ci': _compute_se_ci(F_Lk, B, theta_hat_em),
+                    'se_ci': se_ci_k,
                 }
         # 合并 LR 结果
-        J_L = np.vstack(J_L_list)
-        k_LR, smax_LR, smin_LR = _metrics_from_Jtan(J_L)
-        flc_LR, flmin_LR, fi_LR, fd_LR = _metrics_from_Fisher(F_L)
+        flc_LR, flmin_LR, fi_LR, fd_LR, se_ci_LR = _fisher_metrics_and_se_ci(F_L, B, theta_hat_em)
         result['LR'].update({
-            'k_value': k_LR, 'sigma_max': smax_LR, 'sigma_min': smin_LR,
             'fisher_lambda_cond': flc_LR, 'fisher_lambda_min': flmin_LR,
             'fisher_identifiable': fi_LR, 'fisher_det': fd_LR,
-            'se_ci': _compute_se_ci(F_L, B, theta_hat_em),
+            'se_ci': se_ci_LR,
         })
 
-    # ---- SR：各样本 Jacobian 堆叠，Fisher 加权求和 ----
-    J_S_list = []
+    # ---- SR：各样本计算 Fisher 矩阵，加权求和 ----
     F_S = np.zeros((T - 1, T - 1))
     F_S_list = []
     for sr_ref_md, n_sr in zip(sr_ref_mds, n_srs):
@@ -307,7 +352,6 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
             sr_ref_md['isoform_lengths'], sr_ref_md['sr_read_len'])
         Jphi = compute_Jphi(theta_hat_em, l_tilde)
         J_Sk = A_S @ Jphi @ B
-        J_S_list.append(J_Sk)
         s = float(l_tilde @ theta_hat_em)
         psi = (l_tilde * theta_hat_em) / s if s > 0 else np.ones(T) / T
         p_Sk = np.maximum(A_S @ psi, _EPS)
@@ -318,42 +362,30 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
     if has_sr:
         # 多样本时额外输出每个样本的单独指标
         if len(sr_ref_mds) > 1:
-            for k, (sr_md, J_Sk, F_Sk) in enumerate(zip(sr_ref_mds, J_S_list, F_S_list)):
-                cond_k = sr_md.get('condition_number', (math.nan,) * 4)
-                k_orig_k = float(cond_k[2]) if cond_k[2] is not None else math.nan
-                kv_k, sm_k, smi_k = _metrics_from_Jtan(J_Sk)
-                flc_k, fsmin_k, fi_k, fd_k = _metrics_from_Fisher(F_Sk)
+            for k, F_Sk in enumerate(F_S_list):
+                flc_k, fsmin_k, fi_k, fd_k, se_ci_k = _fisher_metrics_and_se_ci(F_Sk, B, theta_hat_em)
                 result[f'SR_{k+1}'] = {
-                    'k_orig': k_orig_k,
-                    'k_value': kv_k, 'sigma_max': sm_k, 'sigma_min': smi_k,
                     'fisher_lambda_cond': flc_k, 'fisher_lambda_min': fsmin_k,
                     'fisher_identifiable': fi_k, 'fisher_det': fd_k,
-                    'se_ci': _compute_se_ci(F_Sk, B, theta_hat_em),
+                    'se_ci': se_ci_k,
                 }
         # 合并 SR 结果
-        J_S = np.vstack(J_S_list)
-        k_SR, smax_SR, smin_SR = _metrics_from_Jtan(J_S)
-        flc_SR, fsmin_SR, fi_SR, fd_SR = _metrics_from_Fisher(F_S)
+        flc_SR, fsmin_SR, fi_SR, fd_SR, se_ci_SR = _fisher_metrics_and_se_ci(F_S, B, theta_hat_em)
         result['SR'].update({
-            'k_value': k_SR, 'sigma_max': smax_SR, 'sigma_min': smin_SR,
             'fisher_lambda_cond': flc_SR, 'fisher_lambda_min': fsmin_SR,
             'fisher_identifiable': fi_SR, 'fisher_det': fd_SR,
-            'se_ci': _compute_se_ci(F_S, B, theta_hat_em),
+            'se_ci': se_ci_SR,
         })
 
     # ---- Hybrid（只要总样本数 > 1 就计算：含多LR、多SR、或LR+SR）----
     n_total_samples = (len(lr_mds) if has_lr else 0) + (len(sr_mds) if has_sr else 0)
     if n_total_samples > 1:
-        all_J = J_L_list + J_S_list
-        J_H = np.vstack(all_J)
-        k_H, smax_H, smin_H = _metrics_from_Jtan(J_H)
         F_H = F_L + F_S  # F_L/F_S 均从零初始化，无该平台时保持零矩阵
-        flc_H, fhmin_H, fi_H, fd_H = _metrics_from_Fisher(F_H)
+        flc_H, fhmin_H, fi_H, fd_H, se_ci_H = _fisher_metrics_and_se_ci(F_H, B, theta_hat_em)
         result['Hybrid'] = {
-            'k_value': k_H, 'sigma_max': smax_H, 'sigma_min': smin_H,
             'fisher_lambda_cond': flc_H, 'fisher_lambda_min': fhmin_H,
             'fisher_identifiable': fi_H, 'fisher_det': fd_H,
-            'se_ci': _compute_se_ci(F_H, B, theta_hat_em),
+            'se_ci': se_ci_H,
         }
 
     return result
@@ -514,9 +546,9 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
         gene_isoform_tpm = _load_em_tpm(output_path)
         has_em = gene_isoform_tpm is not None
         if has_em:
-            print('[INFO] expression_isoform.out detected; using EM theta for restricted Jacobian.', flush=True)
+            print('[INFO] expression_isoform.out detected; using EM theta for restricted Fisher metrics.', flush=True)
         else:
-            print('[INFO] expression_isoform.out not found; outputting k_orig only.', flush=True)
+            print('[INFO] expression_isoform.out not found; Fisher metrics will not be computed.', flush=True)
 
     # Load per-gene read counts for Fisher matrix scaling (N_L, N_S)
     if not scale_by_N:
@@ -615,24 +647,12 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
         sr_platform_redundant = bool(sr_per_sample_keys)
 
         row = {'gene': gene_name, 'chr': chr_name, 'n_isoforms': T}
-        # 分样本 k_orig 先输出（不依赖 EM）
-        for tag_k in lr_per_sample_keys:
-            row[f'{tag_k}_k_orig'] = _fmt(metrics[tag_k].get('k_orig', math.nan))
-        for tag_k in sr_per_sample_keys:
-            row[f'{tag_k}_k_orig'] = _fmt(metrics[tag_k].get('k_orig', math.nan))
-        # 平台合并 k_orig（仅在非冗余时输出）
-        if has_LR and not lr_platform_redundant:
-            row['LR_k_orig'] = _fmt(metrics['LR']['k_orig'])
-        if has_SR and not sr_platform_redundant:
-            row['SR_k_orig'] = _fmt(metrics['SR']['k_orig'])
 
         if has_em and theta_hat_em is not None:
             # 分样本 Fisher 指标先输出
             for tag_k in lr_per_sample_keys:
                 m_k = metrics[tag_k]
                 row.update({
-                    f'{tag_k}_rJacobi_sigma_min_pos':      _fmt(m_k.get('sigma_min', math.nan)),
-                    f'{tag_k}_rJacobi_k_value':            _fmt(m_k.get('k_value', math.nan)),
                     f'{tag_k}_rfisher_lambda_min':         _fmt(m_k.get('fisher_lambda_min', math.nan)),
                     f'{tag_k}_rfisher_lambda_cond':        _fmt(m_k.get('fisher_lambda_cond', math.nan)),
                     f'{tag_k}_rfisher_det':                _fmt(m_k.get('fisher_det', math.nan)),
@@ -641,8 +661,6 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
             for tag_k in sr_per_sample_keys:
                 m_k = metrics[tag_k]
                 row.update({
-                    f'{tag_k}_rJacobi_sigma_min_pos':      _fmt(m_k.get('sigma_min', math.nan)),
-                    f'{tag_k}_rJacobi_k_value':            _fmt(m_k.get('k_value', math.nan)),
                     f'{tag_k}_rfisher_lambda_min':         _fmt(m_k.get('fisher_lambda_min', math.nan)),
                     f'{tag_k}_rfisher_lambda_cond':        _fmt(m_k.get('fisher_lambda_cond', math.nan)),
                     f'{tag_k}_rfisher_det':                _fmt(m_k.get('fisher_det', math.nan)),
@@ -652,8 +670,6 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
             if has_LR and not lr_platform_redundant:
                 lr_m = metrics['LR']
                 row.update({
-                    'LR_rJacobi_sigma_min_pos':  _fmt(lr_m.get('sigma_min', math.nan)),
-                    'LR_rJacobi_k_value':        _fmt(lr_m.get('k_value', math.nan)),
                     'LR_rfisher_lambda_min':     _fmt(lr_m.get('fisher_lambda_min', math.nan)),
                     'LR_rfisher_lambda_cond':    _fmt(lr_m.get('fisher_lambda_cond', math.nan)),
                     'LR_rfisher_det':            _fmt(lr_m.get('fisher_det', math.nan)),
@@ -662,8 +678,6 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
             if has_SR and not sr_platform_redundant:
                 sr_m = metrics['SR']
                 row.update({
-                    'SR_rJacobi_sigma_min_pos':  _fmt(sr_m.get('sigma_min', math.nan)),
-                    'SR_rJacobi_k_value':        _fmt(sr_m.get('k_value', math.nan)),
                     'SR_rfisher_lambda_min':     _fmt(sr_m.get('fisher_lambda_min', math.nan)),
                     'SR_rfisher_lambda_cond':    _fmt(sr_m.get('fisher_lambda_cond', math.nan)),
                     'SR_rfisher_det':            _fmt(sr_m.get('fisher_det', math.nan)),
@@ -673,8 +687,6 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
             if has_Hybrid:
                 h = metrics['Hybrid']
                 row.update({
-                    'Hybrid_rJacobi_sigma_min_pos':  _fmt(h.get('sigma_min', math.nan)),
-                    'Hybrid_rJacobi_k_value':        _fmt(h.get('k_value', math.nan)),
                     'Hybrid_rfisher_lambda_min':     _fmt(h.get('fisher_lambda_min', math.nan)),
                     'Hybrid_rfisher_lambda_cond':    _fmt(h.get('fisher_lambda_cond', math.nan)),
                     'Hybrid_rfisher_det':            _fmt(h.get('fisher_det', math.nan)),

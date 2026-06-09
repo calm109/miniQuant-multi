@@ -38,7 +38,9 @@ def TrEESR(ref_file_path,output_path,short_read_alignment_file_path,long_read_al
     end_time_1 = datetime.datetime.now()
     print('[INFO] Done in %.3f s'%((end_time_1-start_time).total_seconds()),flush=True)
     print('[INFO] Calculating the condition number...',flush=True)
+    _t = datetime.datetime.now()
     gene_regions_points_list,gene_range,gene_interval_tree_dict = process_annotation_for_alignment(gene_exons_dict,gene_points_dict)
+    print('[TIMER] process_annotation_for_alignment: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
     # SR A 矩阵：对每个 SR SAM 各推断读长、各建一个矩阵
     if isinstance(short_read_alignment_file_path, list):
         sr_sam_list = [p for p in short_read_alignment_file_path if p is not None]
@@ -53,44 +55,63 @@ def TrEESR(ref_file_path,output_path,short_read_alignment_file_path,long_read_al
             sr_read_len = infer_read_len(sr_sam)
             print(f'[INFO] SR read length inferred from {sr_sam}: {sr_read_len}', flush=True)
             if sr_region_selection == 'real_data':
+                _t = datetime.datetime.now()
                 sr_read_count, sr_read_len, num_SRs = parse_alignment(sr_sam, READ_JUNC_MIN_MAP_LEN, gene_points_dict,
                     gene_range, gene_interval_tree_dict, SR_gene_regions_dict, SR_genes_regions_len_dict, gene_isoforms_length_dict, False, False, threads)
+                print('[TIMER] parse_alignment SR: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
                 config.READ_LEN = sr_read_len
-                sr_matrix = generate_all_feature_matrix_short_read(gene_isoforms_dict, SR_gene_regions_dict, sr_read_count, sr_read_len, SR_genes_regions_len_dict, num_SRs, False, gene_isoforms_length_dict=gene_isoforms_length_dict)
+                _t = datetime.datetime.now()
+                sr_matrix = generate_all_feature_matrix_short_read(gene_isoforms_dict, SR_gene_regions_dict, sr_read_count, sr_read_len, SR_genes_regions_len_dict, num_SRs, False, gene_isoforms_length_dict=gene_isoforms_length_dict, threads=threads)
+                print('[TIMER] generate_all_feature_matrix_short_read: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
                 # 额外计算理论 A 矩阵（与 read_length 模式相同的区域过滤）用于可识别性分析
                 # 注意：eff_length 计算需要 inner region 长度，因此传入完整的 SR_genes_regions_len_dict
                 if sr_theoretical_matrix_dict is None:
+                    _t = datetime.datetime.now()
                     theo_SR_regions_dict, _ = filter_regions_read_length(
                         SR_gene_regions_dict, gene_points_dict, SR_genes_regions_len_dict,
-                        READ_JUNC_MIN_MAP_LEN, sr_read_len, sr_read_len)
-                    sr_theoretical_matrix_dict = calculate_all_condition_number(gene_isoforms_dict, theo_SR_regions_dict, SR_genes_regions_len_dict, sr_read_len, allow_multi_exons=False, gene_isoforms_length_dict=gene_isoforms_length_dict)
+                        READ_JUNC_MIN_MAP_LEN, sr_read_len, sr_read_len, threads=threads)
+                    print('[TIMER] filter_regions_read_length SR theoretical: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
+                    _t = datetime.datetime.now()
+                    sr_theoretical_matrix_dict = calculate_all_condition_number(gene_isoforms_dict, theo_SR_regions_dict, SR_genes_regions_len_dict, sr_read_len, allow_multi_exons=False, gene_isoforms_length_dict=gene_isoforms_length_dict, threads=threads)
+                    print('[TIMER] calculate_all_condition_number SR theoretical: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
             else:
-                sr_matrix = calculate_all_condition_number(gene_isoforms_dict, SR_gene_regions_dict, SR_genes_regions_len_dict, sr_read_len, allow_multi_exons=False, gene_isoforms_length_dict=gene_isoforms_length_dict)
+                _t = datetime.datetime.now()
+                sr_matrix = calculate_all_condition_number(gene_isoforms_dict, SR_gene_regions_dict, SR_genes_regions_len_dict, sr_read_len, allow_multi_exons=False, gene_isoforms_length_dict=gene_isoforms_length_dict, threads=threads)
+                print('[TIMER] calculate_all_condition_number SR: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
             sr_matrix_list.append(sr_matrix)
         short_read_gene_matrix_dict = sr_matrix_list if len(sr_matrix_list) > 1 else sr_matrix_list[0]
     else:
         SR_read_len = READ_LEN
-        short_read_gene_matrix_dict = calculate_all_condition_number(gene_isoforms_dict,SR_gene_regions_dict,SR_genes_regions_len_dict,SR_read_len,allow_multi_exons=False,gene_isoforms_length_dict=gene_isoforms_length_dict)
+        _t = datetime.datetime.now()
+        short_read_gene_matrix_dict = calculate_all_condition_number(gene_isoforms_dict,SR_gene_regions_dict,SR_genes_regions_len_dict,SR_read_len,allow_multi_exons=False,gene_isoforms_length_dict=gene_isoforms_length_dict,threads=threads)
+        print('[TIMER] calculate_all_condition_number SR (no SAM): %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
     # LR A 矩阵：每个 LR SAM 各自构建独立矩阵
     if lr_sam_list:
         lr_matrix_list = []
         for k, lr_sam in enumerate(lr_sam_list):
+            _t = datetime.datetime.now()
             rc, rl, total_len, num_LRs, _, _ = parse_alignment(lr_sam, READ_JUNC_MIN_MAP_LEN, gene_points_dict, gene_range, gene_interval_tree_dict, LR_gene_regions_dict, LR_genes_regions_len_dict, gene_isoforms_length_dict, True, filtering, threads)
+            print('[TIMER] parse_alignment LR %d: %.3f s' % (k, (datetime.datetime.now()-_t).total_seconds()), flush=True)
             filtered_LR_regions_dict = None
             # 始终从过滤前的 rl 计算全局中位读长，保证与区域过滤所用阈值一致
+            _t = datetime.datetime.now()
             all_lr_read_lengths = []
             for chr_name in rl:
                 for gene_name in rl[chr_name]:
                     for region in rl[chr_name][gene_name]:
                         all_lr_read_lengths.extend(rl[chr_name][gene_name][region])
             global_median_lr_read_len = int(np.median(all_lr_read_lengths)) if all_lr_read_lengths else 1000
+            print('[TIMER] compute LR median read length: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
             if lr_region_selection == 'read_length':
                 print(f'[INFO] LR SAM {k} global median read length for region filtering: {global_median_lr_read_len} bp', flush=True)
+                _t = datetime.datetime.now()
                 filtered_LR_regions_dict, _ = filter_regions_read_length(
                     LR_gene_regions_dict, gene_points_dict, LR_genes_regions_len_dict,
-                    READ_JUNC_MIN_MAP_LEN, READ_JUNC_MIN_MAP_LEN, global_median_lr_read_len)
+                    READ_JUNC_MIN_MAP_LEN, READ_JUNC_MIN_MAP_LEN, global_median_lr_read_len, threads=threads)
+                print('[TIMER] filter_regions_read_length LR %d: %.3f s' % (k, (datetime.datetime.now()-_t).total_seconds()), flush=True)
             lr_regions_to_use = filtered_LR_regions_dict if filtered_LR_regions_dict is not None else LR_gene_regions_dict
             if lr_region_selection == 'read_length' and filtered_LR_regions_dict is not None:
+                _t = datetime.datetime.now()
                 for chr_name in rc:
                     for gene_name in rc[chr_name]:
                         gene_filtered = filtered_LR_regions_dict.get(chr_name, {}).get(gene_name, {})
@@ -101,11 +122,16 @@ def TrEESR(ref_file_path,output_path,short_read_alignment_file_path,long_read_al
                             for region in list(rl[chr_name][gene_name].keys()):
                                 if region not in gene_filtered:
                                     del rl[chr_name][gene_name][region]
+                print('[TIMER] filter rc/rl by LR regions %d: %.3f s' % (k, (datetime.datetime.now()-_t).total_seconds()), flush=True)
+            _t = datetime.datetime.now()
             lr_matrix = generate_all_feature_matrix_long_read(gene_isoforms_dict, lr_regions_to_use, rc, rl, LR_genes_regions_len_dict, raw_isoform_exons_dict, keep_all_regions=(lr_region_selection == 'read_length'), global_median_lr_read_len=global_median_lr_read_len, threads=threads)
+            print('[TIMER] generate_all_feature_matrix_long_read %d: %.3f s' % (k, (datetime.datetime.now()-_t).total_seconds()), flush=True)
             lr_matrix_list.append(lr_matrix)
         long_read_gene_matrix_dict = lr_matrix_list if len(lr_matrix_list) > 1 else lr_matrix_list[0]
     else:
+        _t = datetime.datetime.now()
         long_read_gene_matrix_dict = calculate_all_condition_number_long_read(gene_isoforms_dict, LR_gene_regions_dict, allow_multi_exons=True)
+        print('[TIMER] calculate_all_condition_number_long_read: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
     end_time_2 = datetime.datetime.now()
     print('[INFO] Done in %.3f s'%((end_time_2-end_time_1).total_seconds()),flush=True)
     raw_gene_num_exon_dict,gene_num_exon_dict,gene_num_isoform_dict = defaultdict(dict),defaultdict(dict),defaultdict(dict)
@@ -202,7 +228,8 @@ def TrEESR_identi_data(ref_file_path, output_path, feature_data_path,
         SR_genes_regions_len_dict,
         global_read_length,
         allow_multi_exons=False,
-        gene_isoforms_length_dict=gene_isoforms_length_dict)
+        gene_isoforms_length_dict=gene_isoforms_length_dict,
+        threads=threads)
 
     # ── Step 4: build pre-loaded TPM dict ──────────────────────────────────
     #   Format expected by _build_theta_hat_em:

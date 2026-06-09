@@ -3,6 +3,15 @@ from numpy import linalg as LA
 import scipy
 from util import check_region_type,cal_inner_region_len
 import config
+from concurrent.futures import ThreadPoolExecutor, as_completed
+try:
+    from threadpoolctl import threadpool_limits as _threadpool_limits
+    def _blas_single_thread():
+        return _threadpool_limits(limits=1, user_api='blas')
+except ImportError:
+    from contextlib import nullcontext
+    def _blas_single_thread():
+        return nullcontext()
 def check_full_rank(isoform_region_matrix):
     if (isoform_region_matrix.shape[1] == 0) or (isoform_region_matrix.shape[0] == 0):
         return False
@@ -104,7 +113,7 @@ def get_condition_number(isoform_region_matrix):
     else:
         # not full rank
         kvalue =  (svd_val_max/svd_val_pos_min)
-    
+
     # Calculate condition number
     regular_condition_number = divide_by_zero(svd_val_max,svd_val_min)
 
@@ -167,36 +176,39 @@ def cal_weight_region(short_read_gene_matrix_dict):
 
 #     return filtered_regions_dict
 
-def calculate_all_condition_number(gene_isoforms_dict,gene_regions_dict,gene_region_len_dict,SR_read_len,allow_multi_exons,gene_isoforms_length_dict=None):
-    gene_matrix_dict = dict()
-    for chr_name in gene_isoforms_dict:
-        gene_matrix_dict[chr_name] = dict()
-        for gene_name in gene_isoforms_dict[chr_name]:
-            isoform_names = gene_isoforms_dict[chr_name][gene_name]
-            # for short read only allow exon and exon-exon junction
-            region_isoform_dict = gene_regions_dict[chr_name][gene_name]
-            # if (not allow_multi_exons):
-            #     region_isoform_dict = filter_regions(gene_regions_dict[chr_name][gene_name],long_read=False)
-            # else:
-            #     region_isoform_dict = filter_regions(gene_regions_dict[chr_name][gene_name],long_read=True)
-            gene_matrix_dict[chr_name][gene_name] = calculate_condition_number(region_isoform_dict,isoform_names,config.normalize_sr_A)
-            region_len_dict = gene_region_len_dict[chr_name][gene_name]
-            gene_matrix_dict[chr_name][gene_name]['region_eff_length_dict'] = calculate_eff_length(region_len_dict,SR_read_len)
-            if config.sr_design_matrix == 'weight':
-                gene_matrix_dict[chr_name][gene_name] ['isoform_region_matrix'] = cal_weight_region(gene_matrix_dict[chr_name][gene_name])
-                if config.normalize_sr_A:
-                    sum_A = gene_matrix_dict[chr_name][gene_name]['isoform_region_matrix'].sum(axis=0)
-                    sum_A[sum_A==0] = 1
-                    gene_matrix_dict[chr_name][gene_name]['isoform_region_matrix'] = gene_matrix_dict[chr_name][gene_name]['isoform_region_matrix']/sum_A
-                gene_matrix_dict[chr_name][gene_name]['condition_number'] = get_condition_number(gene_matrix_dict[chr_name][gene_name]['isoform_region_matrix'])
-            if gene_isoforms_length_dict is not None:
-                iso_len_gene = gene_isoforms_length_dict[chr_name][gene_name]
-                iso_indics = gene_matrix_dict[chr_name][gene_name]['isoform_names_indics']
-                lengths = np.zeros(len(iso_indics))
-                for iso, idx in iso_indics.items():
-                    lengths[idx] = iso_len_gene.get(iso, 0)
-                gene_matrix_dict[chr_name][gene_name]['isoform_lengths'] = lengths
-                gene_matrix_dict[chr_name][gene_name]['sr_read_len'] = float(SR_read_len)
+def calculate_all_condition_number(gene_isoforms_dict,gene_regions_dict,gene_region_len_dict,SR_read_len,allow_multi_exons,gene_isoforms_length_dict=None,threads=1):
+    all_keys = [(c, g) for c in gene_isoforms_dict for g in gene_isoforms_dict[c]]
+    gene_matrix_dict = {c: {} for c in gene_isoforms_dict}
+
+    def _process(chr_name, gene_name):
+        isoform_names = gene_isoforms_dict[chr_name][gene_name]
+        region_isoform_dict = gene_regions_dict[chr_name][gene_name]
+        md = calculate_condition_number(region_isoform_dict, isoform_names, config.normalize_sr_A)
+        region_len_dict = gene_region_len_dict[chr_name][gene_name]
+        md['region_eff_length_dict'] = calculate_eff_length(region_len_dict, SR_read_len)
+        if config.sr_design_matrix == 'weight':
+            md['isoform_region_matrix'] = cal_weight_region(md)
+            if config.normalize_sr_A:
+                sum_A = md['isoform_region_matrix'].sum(axis=0)
+                sum_A[sum_A == 0] = 1
+                md['isoform_region_matrix'] = md['isoform_region_matrix'] / sum_A
+            md['condition_number'] = get_condition_number(md['isoform_region_matrix'])
+        if gene_isoforms_length_dict is not None:
+            iso_len_gene = gene_isoforms_length_dict[chr_name][gene_name]
+            iso_indics = md['isoform_names_indics']
+            lengths = np.zeros(len(iso_indics))
+            for iso, idx in iso_indics.items():
+                lengths[idx] = iso_len_gene.get(iso, 0)
+            md['isoform_lengths'] = lengths
+            md['sr_read_len'] = float(SR_read_len)
+        return chr_name, gene_name, md
+
+    with _blas_single_thread():
+        with ThreadPoolExecutor(max_workers=max(1, threads)) as executor:
+            futures = {executor.submit(_process, c, g): (c, g) for c, g in all_keys}
+            for future in as_completed(futures):
+                c, g, md = future.result()
+                gene_matrix_dict[c][g] = md
     return gene_matrix_dict
 def calculate_all_condition_number_long_read(gene_isoforms_dict,gene_regions_dict,allow_multi_exons):
     gene_matrix_dict = dict()
@@ -212,80 +224,76 @@ def calculate_all_condition_number_long_read(gene_isoforms_dict,gene_regions_dic
             #     region_isoform_dict = filter_regions(gene_regions_dict[chr_name][gene_name],long_read=True)
             gene_matrix_dict[chr_name][gene_name] = calculate_condition_number(region_isoform_dict,isoform_names,config.normalize_sr_A)
     return gene_matrix_dict
-def generate_all_feature_matrix_short_read(gene_isoforms_dict,gene_regions_dict,gene_regions_read_count,SR_read_len,gene_region_len_dict,num_SRs,normalize_A=True,gene_isoforms_length_dict=None):
-    gene_matrix_dict = dict()
-    for chr_name in gene_isoforms_dict:
-        gene_matrix_dict[chr_name] = dict()
-        for gene_name in gene_isoforms_dict[chr_name]:
-            isoform_names = gene_isoforms_dict[chr_name][gene_name]
-            # for short read only allow exon and exon-exon junction
-            # region_isoform_dict = filter_regions(gene_regions_dict[chr_name][gene_name],long_read=False)
-            # region_read_count_dict = filter_regions(gene_regions_read_count[chr_name][gene_name],long_read=False)
-            # region_len_dict = filter_regions(gene_region_len_dict[chr_name][gene_name],long_read=False)
-            region_isoform_dict = {}
-            for region in gene_regions_read_count[chr_name][gene_name]:
-                region_isoform_dict[region] = gene_regions_dict[chr_name][gene_name][region]
-            # region_isoform_dict = gene_regions_dict[chr_name][gene_name]
-            region_read_count_dict = gene_regions_read_count[chr_name][gene_name]
-            region_len_dict = gene_region_len_dict[chr_name][gene_name]
-            matrix_dict = calculate_condition_number(region_isoform_dict,isoform_names,config.normalize_sr_A)
-            if config.sr_region_selection == 'real_data':
-                if config.keep_sr_exon_region == 'nonfullrank':
+def generate_all_feature_matrix_short_read(gene_isoforms_dict,gene_regions_dict,gene_regions_read_count,SR_read_len,gene_region_len_dict,num_SRs,normalize_A=True,gene_isoforms_length_dict=None,threads=1):
+    all_keys = [(c, g) for c in gene_isoforms_dict for g in gene_isoforms_dict[c]]
+    gene_matrix_dict = {c: {} for c in gene_isoforms_dict}
+
+    def _process(chr_name, gene_name):
+        isoform_names = gene_isoforms_dict[chr_name][gene_name]
+        region_isoform_dict = {}
+        for region in gene_regions_read_count[chr_name][gene_name]:
+            region_isoform_dict[region] = gene_regions_dict[chr_name][gene_name][region]
+        region_read_count_dict = gene_regions_read_count[chr_name][gene_name]
+        region_len_dict = gene_region_len_dict[chr_name][gene_name]
+        matrix_dict = calculate_condition_number(region_isoform_dict, isoform_names, config.normalize_sr_A)
+        if config.sr_region_selection == 'real_data':
+            if config.keep_sr_exon_region == 'nonfullrank':
+                region_isoform_dict = {}
+                for region, count in gene_regions_read_count[chr_name][gene_name].copy().items():
+                    if count != 0:
+                        region_isoform_dict[region] = gene_regions_dict[chr_name][gene_name][region]
+                matrix_dict = calculate_condition_number(region_isoform_dict, isoform_names, config.normalize_sr_A)
+                if check_full_rank(matrix_dict['isoform_region_matrix']):
                     region_isoform_dict = {}
-                    for region,count in gene_regions_read_count[chr_name][gene_name].copy().items():
+                    for region, count in gene_regions_read_count[chr_name][gene_name].copy().items():
                         if count != 0:
                             region_isoform_dict[region] = gene_regions_dict[chr_name][gene_name][region]
-                    matrix_dict = calculate_condition_number(region_isoform_dict,isoform_names,config.normalize_sr_A)
-                    ## if full rank
-                    if check_full_rank(matrix_dict['isoform_region_matrix']):
-                        region_isoform_dict = {}
-                        for region,count in gene_regions_read_count[chr_name][gene_name].copy().items():
-                            if count != 0:
-                                region_isoform_dict[region] = gene_regions_dict[chr_name][gene_name][region]
-                            else:
-                                del gene_regions_read_count[chr_name][gene_name][region]
-                    else:
-                        region_isoform_dict = {}
-                        for region,count in gene_regions_read_count[chr_name][gene_name].copy().items():
-                            if count != 0 or check_region_type(region) in ['one_exon','two_exons','exons']:
-                                region_isoform_dict[region] = gene_regions_dict[chr_name][gene_name][region]
-                            else:
-                                del gene_regions_read_count[chr_name][gene_name][region]
-                    matrix_dict = calculate_condition_number(region_isoform_dict,isoform_names,config.normalize_sr_A)
-            matrix_dict['region_eff_length_dict'] = calculate_eff_length(region_len_dict,SR_read_len)
-            if config.multi_exon_region_weight == 'minus_inner_region':
-                matrix_dict['isoform_region_matrix'] = cal_weight_multi_exon_region(matrix_dict,region_len_dict,SR_read_len)
-                if config.normalize_sr_A:
-                    sum_A = matrix_dict['isoform_region_matrix'].sum(axis=0)
-                    sum_A[sum_A==0] = 1
-                    matrix_dict['isoform_region_matrix'] = matrix_dict['isoform_region_matrix']/sum_A
-                matrix_dict['condition_number'] = get_condition_number(matrix_dict['isoform_region_matrix'])
-            if config.sr_design_matrix == 'weight':
-                matrix_dict['isoform_region_matrix'] = cal_weight_region(matrix_dict)
-                if config.normalize_sr_A:
-                    sum_A = matrix_dict['isoform_region_matrix'].sum(axis=0)
-                    sum_A[sum_A==0] = 1
-                    matrix_dict['isoform_region_matrix'] = matrix_dict['isoform_region_matrix']/sum_A
-                matrix_dict['condition_number'] = get_condition_number(matrix_dict['isoform_region_matrix'])
-            matrix_dict['region_abund_matrix'] = construct_region_abundance_matrix_short_read(region_read_count_dict,matrix_dict['region_eff_length_dict'],matrix_dict['region_names_indics'],num_SRs)
-            num_SRs_mapped_gene = 0
-            for region in region_read_count_dict:
-                num_SRs_mapped_gene += region_read_count_dict[region]
-            matrix_dict['num_SRs_mapped_gene'] = num_SRs_mapped_gene
-            if gene_isoforms_length_dict is not None:
-                iso_len_gene = gene_isoforms_length_dict[chr_name][gene_name]
-                iso_indics = matrix_dict['isoform_names_indics']
-                lengths = np.zeros(len(iso_indics))
-                for iso, idx in iso_indics.items():
-                    lengths[idx] = iso_len_gene.get(iso, 0)
-                matrix_dict['isoform_lengths'] = lengths
-                matrix_dict['sr_read_len'] = float(SR_read_len)
-            gene_matrix_dict[chr_name][gene_name] = matrix_dict
+                        else:
+                            del gene_regions_read_count[chr_name][gene_name][region]
+                else:
+                    region_isoform_dict = {}
+                    for region, count in gene_regions_read_count[chr_name][gene_name].copy().items():
+                        if count != 0 or check_region_type(region) in ['one_exon', 'two_exons', 'exons']:
+                            region_isoform_dict[region] = gene_regions_dict[chr_name][gene_name][region]
+                        else:
+                            del gene_regions_read_count[chr_name][gene_name][region]
+                matrix_dict = calculate_condition_number(region_isoform_dict, isoform_names, config.normalize_sr_A)
+        matrix_dict['region_eff_length_dict'] = calculate_eff_length(region_len_dict, SR_read_len)
+        if config.multi_exon_region_weight == 'minus_inner_region':
+            matrix_dict['isoform_region_matrix'] = cal_weight_multi_exon_region(matrix_dict, region_len_dict, SR_read_len)
+            if config.normalize_sr_A:
+                sum_A = matrix_dict['isoform_region_matrix'].sum(axis=0)
+                sum_A[sum_A == 0] = 1
+                matrix_dict['isoform_region_matrix'] = matrix_dict['isoform_region_matrix'] / sum_A
+            matrix_dict['condition_number'] = get_condition_number(matrix_dict['isoform_region_matrix'])
+        if config.sr_design_matrix == 'weight':
+            matrix_dict['isoform_region_matrix'] = cal_weight_region(matrix_dict)
+            if config.normalize_sr_A:
+                sum_A = matrix_dict['isoform_region_matrix'].sum(axis=0)
+                sum_A[sum_A == 0] = 1
+                matrix_dict['isoform_region_matrix'] = matrix_dict['isoform_region_matrix'] / sum_A
+            matrix_dict['condition_number'] = get_condition_number(matrix_dict['isoform_region_matrix'])
+        matrix_dict['region_abund_matrix'] = construct_region_abundance_matrix_short_read(
+            region_read_count_dict, matrix_dict['region_eff_length_dict'], matrix_dict['region_names_indics'], num_SRs)
+        matrix_dict['num_SRs_mapped_gene'] = sum(region_read_count_dict[r] for r in region_read_count_dict)
+        if gene_isoforms_length_dict is not None:
+            iso_len_gene = gene_isoforms_length_dict[chr_name][gene_name]
+            iso_indics = matrix_dict['isoform_names_indics']
+            lengths = np.zeros(len(iso_indics))
+            for iso, idx in iso_indics.items():
+                lengths[idx] = iso_len_gene.get(iso, 0)
+            matrix_dict['isoform_lengths'] = lengths
+            matrix_dict['sr_read_len'] = float(SR_read_len)
+        return chr_name, gene_name, matrix_dict
 
+    with _blas_single_thread():
+        with ThreadPoolExecutor(max_workers=max(1, threads)) as executor:
+            futures = {executor.submit(_process, c, g): (c, g) for c, g in all_keys}
+            for future in as_completed(futures):
+                c, g, md = future.result()
+                gene_matrix_dict[c][g] = md
     return gene_matrix_dict
 def is_multi_isoform_region(matrix_dict,region):
     index = matrix_dict['region_names_indics'][region]
-    A = matrix_dict['isoform_region_matrix'].copy()
-    A[A != 0] = 1
-    sum_A = A.sum(axis=1)
-    return sum_A[index] > 1
+    row = matrix_dict['isoform_region_matrix'][index]
+    return int((row != 0).sum()) > 1

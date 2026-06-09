@@ -31,10 +31,9 @@ def parse_alignment_iteration(alignment_file_path, READ_JUNC_MIN_MAP_LEN,map_f,t
     with open(alignment_file_path, 'r') as aln_file:
         local_gene_regions_read_count = {}
         local_gene_regions_read_length = {}
-        local_gene_regions_read_pos = {}
         aln_file.seek(start_file_pos)
         line_num_ct = 0
-        max_buffer_size = 1e1
+        max_buffer_size = 5e4
         buffer_size = 0
         for line in aln_file: # 这里改成逐行读取sam文件，之前是一次性读取整个sam文件到内存中，现在改成逐行读取，减少内存占用
             line_num_ct += 1
@@ -56,61 +55,40 @@ def parse_alignment_iteration(alignment_file_path, READ_JUNC_MIN_MAP_LEN,map_f,t
                         rname,gname,region_name = mapping_area['chr_name'],mapping_area['gene_name'],mapping_area['region_name'] # 这里提取出该read比对到的基因-区间的信息，包括染色体、基因名称、区间名称等
                         if rname not in local_gene_regions_read_count:
                             local_gene_regions_read_count[rname],local_gene_regions_read_length[rname] = {},{}
-                            local_gene_regions_read_pos[rname] = {}
                         if gname not in local_gene_regions_read_count[rname]:
                             local_gene_regions_read_count[rname][gname],local_gene_regions_read_length[rname][gname] = {},{}
-                            local_gene_regions_read_pos[rname][gname] = {}
                         if region_name not in local_gene_regions_read_count[rname][gname]:
                             local_gene_regions_read_count[rname][gname][region_name],local_gene_regions_read_length[rname][gname][region_name] = 0,[]
-                            local_gene_regions_read_pos[rname][gname][region_name] = []
-                        local_gene_regions_read_count[rname][gname][region_name] += 1 
+                        local_gene_regions_read_count[rname][gname][region_name] += 1
                         # if long_read:
                         local_gene_regions_read_length[rname][gname][region_name].append(mapping['read_length'])
-                        local_gene_regions_read_pos[rname][gname][region_name].append(mapping)
                     buffer_size += 1
             except Exception as e:
                 tb = traceback.format_exc()
                 print(Exception('Failed to on ' + line, tb))
                 continue
             if buffer_size > max_buffer_size:
-                temp_queue.put((local_gene_regions_read_count,local_gene_regions_read_length,local_gene_regions_read_pos))
+                temp_queue.put((local_gene_regions_read_count,local_gene_regions_read_length))
                 local_gene_regions_read_count,local_gene_regions_read_length = {},{}
-                local_gene_regions_read_pos = {}
                 buffer_size = 0
         if buffer_size > 0:
-            temp_queue.put((local_gene_regions_read_count,local_gene_regions_read_length,local_gene_regions_read_pos))
+            temp_queue.put((local_gene_regions_read_count,local_gene_regions_read_length))
     return # 这里改成多进程版本，之前是单线程版本直接返回统计结果，现在改成多进程版本，使用 temp_queue 将统计结果传回主进程，由 mapping_listener 函数进行汇总统计
-def mapping_listener(temp_queue,gene_regions_read_count,gene_regions_read_length,gene_regions_read_pos):
+def mapping_listener(temp_queue,gene_regions_read_count,gene_regions_read_length):
     num_mapped_lines = 0
-    num_lines = 0
     while True:
         msg = temp_queue.get()
         if msg == 'kill':
             break
         else:
-            local_gene_regions_read_count,local_gene_regions_read_length,local_gene_regions_read_pos = msg
+            local_gene_regions_read_count,local_gene_regions_read_length = msg
             for rname in local_gene_regions_read_count:
                 for gname in local_gene_regions_read_count[rname]:
                     for region in local_gene_regions_read_count[rname][gname]:
                         num_mapped_lines += local_gene_regions_read_count[rname][gname][region]
                         gene_regions_read_count[rname][gname][region] += local_gene_regions_read_count[rname][gname][region]
                         gene_regions_read_length[rname][gname][region] += local_gene_regions_read_length[rname][gname][region]
-                        gene_regions_read_pos[rname][gname][region] += local_gene_regions_read_pos[rname][gname][region]
-
-            # for mapping in local_all_mappings:
-            #     num_lines += 1
-            #     if len(mapping['gene_candidates'])>0:
-            #         num_mapped_to_gene += 1
-            #     if (mapping['read_mapped']):
-            #         num_mapped_lines += 1
-            #         for mapping_area in [random.choice(mapping['mapping_area'])]:
-            #             rname,gname,region_name = mapping_area['chr_name'],mapping_area['gene_name'],mapping_area['region_name']
-            #             if region_name in gene_regions_read_count[rname][gname]:
-            #                 gene_regions_read_count[rname][gname][region_name] += 1 
-            #                 gene_regions_read_length[rname][gname][region_name].append(mapping['read_length'])
-            #         read_lens.append(mapping['read_length'])
-            #         read_names.update(local_read_names)
-    return gene_regions_read_count,gene_regions_read_length,num_mapped_lines,gene_regions_read_pos
+    return gene_regions_read_count,gene_regions_read_length,num_mapped_lines
 
 # @profile
 def get_aln_line_marker(alignment_file_path,threads):
@@ -142,26 +120,18 @@ def parse_alignment(alignment_file_path,READ_JUNC_MIN_MAP_LEN,gene_points_dict,g
     manager = mp.Manager()
     gene_regions_read_count = {}
     gene_regions_read_length ={}
-    gene_regions_read_pos = {}
     global filtered_gene_regions_dict
     # 初始化基因-区间的读数统计字典，结构为 gene_regions_read_count[chr][gene][region] = count，同时初始化一个过滤后的基因-区间字典 filtered_gene_regions_dict 用于后续快速判断某个区间是否需要考虑
-    filtered_gene_regions_dict = defaultdict(lambda: defaultdict(dict)) 
+    filtered_gene_regions_dict = defaultdict(lambda: defaultdict(dict))
     for rname in gene_regions_dict:
-        gene_regions_read_pos[rname] = {}
         gene_regions_read_count[rname],gene_regions_read_length[rname] = {},{}
         for gname in gene_regions_dict[rname]:
             gene_regions_read_count[rname][gname],gene_regions_read_length[rname][gname] = {},{}
-            gene_regions_read_pos[rname][gname] = {}
-            # if (not long_read):
-            #     per_gene_regions_dict = filter_regions(gene_regions_dict[rname][gname],long_read=False)
-            # else:
-            #     per_gene_regions_dict =  filter_regions(gene_regions_dict[rname][gname],long_read=True)
             per_gene_regions_dict =  gene_regions_dict[rname][gname]
             # 这里提前把所有已知区域都初始化为0，这样即使没有read比对到某区域，该区域仍然存在于字典中（对SR模式的矩阵构建有意义）。
             for region in per_gene_regions_dict:
                 gene_regions_read_count[rname][gname][region] = 0
                 gene_regions_read_length[rname][gname][region] = []
-                gene_regions_read_pos[rname][gname][region] = []
                 filtered_gene_regions_dict[rname][gname][region] = True
     if alignment_file_path == None:
         return gene_regions_read_count,150,0
@@ -186,7 +156,7 @@ def parse_alignment(alignment_file_path,READ_JUNC_MIN_MAP_LEN,gene_points_dict,g
     pool = mp.Pool(threads+1)
     # partial_read_alignment = partial(parse_alignment_iteration,alignment_file_path)
     temp_queue = manager.Queue()    
-    watcher = pool.apply_async(mapping_listener, args=(temp_queue,gene_regions_read_count,gene_regions_read_length,gene_regions_read_pos))
+    watcher = pool.apply_async(mapping_listener, args=(temp_queue,gene_regions_read_count,gene_regions_read_length))
     # parse_alignment_iteration函数读取并处理sam文件
     partial_read_alignment = partial(parse_alignment_iteration,alignment_file_path, READ_JUNC_MIN_MAP_LEN,map_f,temp_queue,long_read) # 这里改成多进程版本，之前是单线程版本直接调用 parse_alignment_iteration 函数，现在改成多进程版本，使用 pool.apply_async 来异步执行 parse_alignment_iteration 函数，并将结果通过 temp_queue 传回主进程，由 mapping_listener 函数进行汇总统计
     futures = [] 
@@ -199,7 +169,7 @@ def parse_alignment(alignment_file_path,READ_JUNC_MIN_MAP_LEN,gene_points_dict,g
     for future in futures:
         future.get()
     temp_queue.put('kill')
-    gene_regions_read_count,gene_regions_read_length,num_mapped_lines,gene_regions_read_pos = watcher.get()
+    gene_regions_read_count,gene_regions_read_length,num_mapped_lines = watcher.get()
     pool.close()
     pool.join()
     read_lens = []
@@ -257,7 +227,7 @@ def parse_alignment(alignment_file_path,READ_JUNC_MIN_MAP_LEN,gene_points_dict,g
                     num_long_reads += len(read_length_list)
                     # 保留全部零读段区域（包括非full-length区域），使可识别性矩阵A与SR对称（纯注释驱动）
                     # EM定量路径中零读段区域会被 add_full_length_region 逻辑的 continue 跳过，不影响结果
-        return gene_regions_read_count,gene_regions_read_length,sum(read_lens),num_long_reads,filtered_gene_regions_read_length,gene_regions_read_pos
+        return gene_regions_read_count,gene_regions_read_length,sum(read_lens),num_long_reads,filtered_gene_regions_read_length,None
     # 对于 SR 数据，统计所有比对到已知区域的 read 的长度，并计算平均 read 长度，后续在构建基因-区间矩阵时可以根据该平均 read 长度来判断某个区间是否有足够的覆盖度（即是否有足够多的 read 比对到该区间且这些 read 的长度足够长），从而决定是否保留该区间
     else:
         all_read_len = []

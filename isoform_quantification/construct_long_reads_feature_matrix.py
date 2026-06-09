@@ -3,7 +3,7 @@ import numpy as np
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from construct_feature_matrix import (
-    calculate_condition_number, is_multi_isoform_region, get_condition_number,
+    calculate_condition_number, get_condition_number,
     calculate_eff_length, cal_weight_region
 )
 import config
@@ -74,14 +74,11 @@ def generate_all_feature_matrix_long_read(gene_isoforms_dict, gene_regions_dict,
         matrix_dict['num_exons'] = {}
         for isoform in isoform_names:
             matrix_dict['num_exons'][isoform] = len(raw_isoform_exons_dict[chr_name][gene_name][isoform]['start_pos'])
-        matrix_dict['multi_isoforms_count'], matrix_dict['unique_isoforms_count'] = 0, 0
-        for region in matrix_dict['region_names_indics']:
-            index = matrix_dict['region_names_indics'][region]
-            count = matrix_dict['region_abund_matrix'][index]
-            if is_multi_isoform_region(matrix_dict, region):
-                matrix_dict['multi_isoforms_count'] += count
-            else:
-                matrix_dict['unique_isoforms_count'] += count
+        _A = matrix_dict['isoform_region_matrix']
+        _is_multi = (_A != 0).sum(axis=1) > 1
+        _counts = matrix_dict['region_abund_matrix']
+        matrix_dict['multi_isoforms_count'] = float(_counts[_is_multi].sum())
+        matrix_dict['unique_isoforms_count'] = float(_counts[~_is_multi].sum())
 
         try:
             matrix_dict['condition_number'] = get_condition_number(matrix_dict['isoform_region_matrix'])
@@ -98,16 +95,25 @@ def generate_all_feature_matrix_long_read(gene_isoforms_dict, gene_regions_dict,
     ]
 
     gene_matrix_dict = {}
-    with ThreadPoolExecutor(max_workers=max(1, threads)) as executor:
-        future_to_key = {
-            executor.submit(_process_gene, chr_name, gene_name): (chr_name, gene_name)
-            for chr_name, gene_name in all_gene_keys
-        }
-        for future in as_completed(future_to_key):
-            chr_name, gene_name = future_to_key[future]
-            matrix_dict = future.result()
-            if chr_name not in gene_matrix_dict:
-                gene_matrix_dict[chr_name] = {}
-            gene_matrix_dict[chr_name][gene_name] = matrix_dict
+    # 限制每个 Python 线程内 BLAS 只用 1 个线程，避免 32 Python线程 × 32 BLAS线程
+    # 造成 1024 线程争抢 32 核的过度订阅问题
+    try:
+        from threadpoolctl import threadpool_limits
+        blas_ctx = threadpool_limits(limits=1, user_api='blas')
+    except ImportError:
+        from contextlib import nullcontext
+        blas_ctx = nullcontext()
+    with blas_ctx:
+        with ThreadPoolExecutor(max_workers=max(1, threads)) as executor:
+            future_to_key = {
+                executor.submit(_process_gene, chr_name, gene_name): (chr_name, gene_name)
+                for chr_name, gene_name in all_gene_keys
+            }
+            for future in as_completed(future_to_key):
+                chr_name, gene_name = future_to_key[future]
+                matrix_dict = future.result()
+                if chr_name not in gene_matrix_dict:
+                    gene_matrix_dict[chr_name] = {}
+                gene_matrix_dict[chr_name][gene_name] = matrix_dict
 
     return gene_matrix_dict

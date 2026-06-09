@@ -55,19 +55,31 @@ def check_valid_region(chr_name,gene_name,region_name,genes_regions_len_dict,max
             is_region_valid = True
     return is_region_valid
 
-def filter_regions_read_length(gene_regions_dict,gene_points_dict,genes_regions_len_dict,READ_JUNC_MIN_MAP_LEN,min_read_len,max_read_len=None):
+def filter_regions_read_length(gene_regions_dict,gene_points_dict,genes_regions_len_dict,READ_JUNC_MIN_MAP_LEN,min_read_len,max_read_len=None,threads=1):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     new_gene_regions_dict = defaultdict(lambda:defaultdict(dict))
     new_genes_regions_len_dict = defaultdict(lambda:defaultdict(dict))
-    for chr_name in gene_regions_dict:
-        for gene_name in gene_regions_dict[chr_name]:
-            point_dict = {}
-            for coord in gene_points_dict[chr_name][gene_name]:
-                point_dict['P{}'.format(gene_points_dict[chr_name][gene_name][coord])] = int(coord)
-            for region_name in gene_regions_dict[chr_name][gene_name]:
-                is_region_valid = check_valid_region(chr_name,gene_name,region_name,genes_regions_len_dict,max_read_len,min_read_len,point_dict,READ_JUNC_MIN_MAP_LEN)
-                if (is_region_valid):
-                    new_gene_regions_dict[chr_name][gene_name][region_name] = gene_regions_dict[chr_name][gene_name][region_name]
-                    new_genes_regions_len_dict[chr_name][gene_name][region_name] = genes_regions_len_dict[chr_name][gene_name][region_name]
+    all_keys = [(c, g) for c in gene_regions_dict for g in gene_regions_dict[c]]
+
+    def _process(chr_name, gene_name):
+        point_dict = {}
+        for coord in gene_points_dict[chr_name][gene_name]:
+            point_dict['P{}'.format(gene_points_dict[chr_name][gene_name][coord])] = int(coord)
+        valid_regions = {}
+        valid_lens = {}
+        for region_name in gene_regions_dict[chr_name][gene_name]:
+            if check_valid_region(chr_name, gene_name, region_name, genes_regions_len_dict, max_read_len, min_read_len, point_dict, READ_JUNC_MIN_MAP_LEN):
+                valid_regions[region_name] = gene_regions_dict[chr_name][gene_name][region_name]
+                valid_lens[region_name] = genes_regions_len_dict[chr_name][gene_name][region_name]
+        return chr_name, gene_name, valid_regions, valid_lens
+
+    with ThreadPoolExecutor(max_workers=max(1, threads)) as executor:
+        futures = {executor.submit(_process, c, g): (c, g) for c, g in all_keys}
+        for future in as_completed(futures):
+            c, g, vr, vl = future.result()
+            if vr:
+                new_gene_regions_dict[c][g] = vr
+                new_genes_regions_len_dict[c][g] = vl
     return new_gene_regions_dict,new_genes_regions_len_dict
 def filter_regions_num_exons(gene_regions_dict,genes_regions_len_dict):
     new_gene_regions_dict = defaultdict(lambda:defaultdict(dict))
