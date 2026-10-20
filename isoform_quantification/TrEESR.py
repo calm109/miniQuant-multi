@@ -5,7 +5,7 @@ from construct_feature_matrix import calculate_all_condition_number,calculate_al
 from parse_annotation_main import parse_reference_annotation
 from generate_output import generate_TrEESR_output
 from construct_feature_matrix import generate_all_feature_matrix_short_read
-from construct_long_reads_feature_matrix import generate_all_feature_matrix_long_read
+from construct_long_reads_feature_matrix import generate_all_feature_matrix_long_read, get_forced_full_length_regions
 from parse_annotation_main import parse_reference_annotation,process_annotation_for_alignment,filter_regions_read_length
 from parse_alignment_main import parse_alignment
 from identifiability import compute_and_output_identifiability
@@ -13,7 +13,7 @@ import config
 import datetime
 from pathlib import Path
 import shutil
-def TrEESR(ref_file_path,output_path,short_read_alignment_file_path,long_read_alignment_file_path,sr_region_selection,filtering,threads,lr_region_selection='read_length',READ_LEN=150,READ_JUNC_MIN_MAP_LEN=0):
+def TrEESR(ref_file_path,output_path,short_read_alignment_file_path,long_read_alignment_file_path,sr_region_selection,filtering,threads,lr_region_selection='read_length',READ_LEN=150,READ_JUNC_MIN_MAP_LEN=0,filter_tpm=False):
     # long_read_alignment_file_path 可以是单个路径字符串或路径列表
     if isinstance(long_read_alignment_file_path, list):
         lr_sam_list = [p for p in long_read_alignment_file_path if p is not None]
@@ -93,22 +93,46 @@ def TrEESR(ref_file_path,output_path,short_read_alignment_file_path,long_read_al
             rc, rl, total_len, num_LRs, _, _ = parse_alignment(lr_sam, READ_JUNC_MIN_MAP_LEN, gene_points_dict, gene_range, gene_interval_tree_dict, LR_gene_regions_dict, LR_genes_regions_len_dict, gene_isoforms_length_dict, True, filtering, threads)
             print('[TIMER] parse_alignment LR %d: %.3f s' % (k, (datetime.datetime.now()-_t).total_seconds()), flush=True)
             filtered_LR_regions_dict = None
-            # 始终从过滤前的 rl 计算全局中位读长，保证与区域过滤所用阈值一致
+            # 始终从过滤前的 rl 计算读长分位数，保证与区域过滤所用阈值一致
             _t = datetime.datetime.now()
             all_lr_read_lengths = []
             for chr_name in rl:
                 for gene_name in rl[chr_name]:
                     for region in rl[chr_name][gene_name]:
                         all_lr_read_lengths.extend(rl[chr_name][gene_name][region])
-            global_median_lr_read_len = int(np.median(all_lr_read_lengths)) if all_lr_read_lengths else 1000
-            print('[TIMER] compute LR median read length: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
+            if all_lr_read_lengths:
+                q25_lr_read_len = int(np.percentile(all_lr_read_lengths, 25))
+                global_median_lr_read_len = int(np.median(all_lr_read_lengths))
+                q75_lr_read_len = int(np.percentile(all_lr_read_lengths, 75))
+            else:
+                q25_lr_read_len = global_median_lr_read_len = q75_lr_read_len = 1000
+            print('[TIMER] compute LR read length quantiles: %.3f s' % (datetime.datetime.now()-_t).total_seconds(), flush=True)
             if lr_region_selection == 'read_length':
-                print(f'[INFO] LR SAM {k} global median read length for region filtering: {global_median_lr_read_len} bp', flush=True)
+                print(f'[INFO] LR SAM {k} read length quantiles for region filtering: '
+                      f'Q25={q25_lr_read_len} Q50={global_median_lr_read_len} Q75={q75_lr_read_len} bp', flush=True)
                 _t = datetime.datetime.now()
-                filtered_LR_regions_dict, _ = filter_regions_read_length(
-                    LR_gene_regions_dict, gene_points_dict, LR_genes_regions_len_dict,
-                    READ_JUNC_MIN_MAP_LEN, READ_JUNC_MIN_MAP_LEN, global_median_lr_read_len, threads=threads)
-                print('[TIMER] filter_regions_read_length LR %d: %.3f s' % (k, (datetime.datetime.now()-_t).total_seconds()), flush=True)
+                # 分别用 Q25/Q50/Q75 三个读长阈值做"可跨越性"过滤（含短 isoform 全长 region 强制保留），
+                # 再取三者区域集合的并集：同一 region 在多个分位数下存活时，其 isoform 归属（0/1 模式）
+                # 完全由注释决定、与分位数无关，因此直接取并集等价于"分别建矩阵、非零置1再合并"，
+                # 且只需在 generate_all_feature_matrix_long_read 里对合并结果做一次列归一化。
+                filtered_LR_regions_dict = defaultdict(lambda: defaultdict(dict))
+                for q_read_len in (q25_lr_read_len, global_median_lr_read_len, q75_lr_read_len):
+                    filtered_q, _ = filter_regions_read_length(
+                        LR_gene_regions_dict, gene_points_dict, LR_genes_regions_len_dict,
+                        READ_JUNC_MIN_MAP_LEN, q_read_len, q_read_len, threads=threads)
+                    for chr_name in LR_gene_regions_dict:
+                        for gene_name in LR_gene_regions_dict[chr_name]:
+                            # 短 isoform（自身总长度 <= 该分位数读长）强制保留其全长 region，
+                            # 避免它在该分位数下因所有候选 region 都过短而完全消失；
+                            # 若该全长 region 与其他（更长的）isoform 共享，则全局保留，二者都受益。
+                            forced_regions = get_forced_full_length_regions(
+                                LR_gene_regions_dict, chr_name, gene_name,
+                                gene_isoforms_length_dict, q_read_len)
+                            gene_filtered_q = filtered_q.get(chr_name, {}).get(gene_name, {})
+                            for region in set(gene_filtered_q) | forced_regions:
+                                filtered_LR_regions_dict[chr_name][gene_name][region] = \
+                                    LR_gene_regions_dict[chr_name][gene_name][region]
+                print('[TIMER] filter_regions_read_length LR %d (Q25/Q50/Q75 union): %.3f s' % (k, (datetime.datetime.now()-_t).total_seconds()), flush=True)
             lr_regions_to_use = filtered_LR_regions_dict if filtered_LR_regions_dict is not None else LR_gene_regions_dict
             if lr_region_selection == 'read_length' and filtered_LR_regions_dict is not None:
                 _t = datetime.datetime.now()
@@ -151,8 +175,8 @@ def TrEESR(ref_file_path,output_path,short_read_alignment_file_path,long_read_al
     gene_feature_dict = generate_TrEESR_output(output_path,sr_output_matrix_dict,long_read_gene_matrix_dict,info_dict_list,same_structure_isoform_dict,removed_gene_isoform_dict,gene_points_dict,has_lr_data=bool(lr_sam_list),has_sr_data=bool(sr_sam_list))
     sr_matrix_for_identifiability = short_read_gene_matrix_dict if sr_sam_list else None
     lr_matrix_for_identifiability = long_read_gene_matrix_dict if lr_sam_list else None
-    compute_and_output_identifiability(output_path, sr_matrix_for_identifiability, lr_matrix_for_identifiability, sr_theoretical_matrix_dict, threads=threads)
-    compute_and_output_identifiability(output_path, sr_matrix_for_identifiability, lr_matrix_for_identifiability, sr_theoretical_matrix_dict, threads=threads, scale_by_N=False)
+    compute_and_output_identifiability(output_path, sr_matrix_for_identifiability, lr_matrix_for_identifiability, sr_theoretical_matrix_dict, threads=threads, filter_tpm=filter_tpm)
+    compute_and_output_identifiability(output_path, sr_matrix_for_identifiability, lr_matrix_for_identifiability, sr_theoretical_matrix_dict, threads=threads, scale_by_N=False, filter_tpm=filter_tpm)
     ref_annotation_dict_list = [gene_exons_dict,gene_points_dict,gene_isoforms_dict,SR_gene_regions_dict,SR_genes_regions_len_dict,LR_gene_regions_dict,LR_genes_regions_len_dict,gene_isoforms_length_dict,raw_isoform_exons_dict,raw_gene_exons_dict]
     return gene_feature_dict
 def get_kvalues_dict(ref_file_path,threads,READ_LEN=150,READ_JUNC_MIN_MAP_LEN=10):
@@ -167,7 +191,7 @@ def get_kvalues_dict(ref_file_path,threads,READ_LEN=150,READ_JUNC_MIN_MAP_LEN=10
 
 def TrEESR_identi_data(ref_file_path, output_path, feature_data_path,
                         sr_region_selection='read_length', threads=1,
-                        READ_JUNC_MIN_MAP_LEN=1):
+                        READ_JUNC_MIN_MAP_LEN=1, filter_tpm=False):
     """
     Compute identifiability metrics from a GTF annotation and feature_data.tsv,
     without requiring any SAM alignment files.
@@ -180,6 +204,10 @@ def TrEESR_identi_data(ref_file_path, output_path, feature_data_path,
     sr_region_selection : str  region filtering strategy [read_length|num_exons|real_data]
     threads             : int
     READ_JUNC_MIN_MAP_LEN : int
+    filter_tpm           : bool  if True, additionally compute identifiability after
+                           dropping isoforms with relative_abundance < 1e-5 and write
+                           identifiability_filterTPM.tsv / isoform_SE_CI_filterTPM.tsv
+                           alongside the unfiltered outputs (see compute_and_output_identifiability).
 
     feature_data.tsv columns (tab-separated, header optional):
         1. transcript_name   – must match GTF transcript_id
@@ -257,6 +285,7 @@ def TrEESR_identi_data(ref_file_path, output_path, feature_data_path,
         threads=threads,
         _preloaded_tpm=gene_isoform_tpm,
         _preloaded_counts=gene_read_counts,
+        filter_tpm=filter_tpm,
     )
     compute_and_output_identifiability(
         output_path=output_path,
@@ -267,6 +296,7 @@ def TrEESR_identi_data(ref_file_path, output_path, feature_data_path,
         _preloaded_tpm=gene_isoform_tpm,
         _preloaded_counts=gene_read_counts,
         scale_by_N=False,
+        filter_tpm=filter_tpm,
     )
 
 

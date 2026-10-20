@@ -49,6 +49,13 @@ def parse_arguments():
              "(1) transcript_name, (2) gene_name, (3) gene_count, "
              "(4) transcript_abundance, (5) read_length. "
              "When this option is set, -srsam / -lrsam are not required.")
+    optional_TrEESR.add_argument('--filterTPM', action='store_true', default=False,
+        help="Additionally compute identifiability after removing isoforms with "
+             "EM relative abundance (theta_hat) < 1e-5, on top of the normal "
+             "full-transcript-set identifiability. Writes identifiability_filterTPM.tsv "
+             "and isoform_SE_CI_filterTPM.tsv (and their _no_N variants) alongside the "
+             "unfiltered identifiability.tsv / isoform_SE_CI.tsv, which are always written "
+             "unchanged. Without this flag, only the full (unfiltered) result is computed.")
 
     parser_EM = subparsers.add_parser('quantify', aliases=['EM'],help='Isoform quantification by EM algorithm')
     requiredNamed_EM = parser_EM.add_argument_group('required named arguments for isoform quantification')
@@ -164,9 +171,10 @@ def parse_arguments():
                 sr_region_selection=args.sr_region_selection,
                 threads=args.threads,
                 READ_JUNC_MIN_MAP_LEN=args.READ_JUNC_MIN_MAP_LEN,
+                filter_tpm=args.filterTPM,
             )
         else:
-            TrEESR(args.gtf_annotation_path,args.output_path,args.short_read_sam_path,args.long_read_sam_path,args.sr_region_selection,args.filtering,args.threads,lr_region_selection=args.lr_region_selection,READ_JUNC_MIN_MAP_LEN=args.READ_JUNC_MIN_MAP_LEN)
+            TrEESR(args.gtf_annotation_path,args.output_path,args.short_read_sam_path,args.long_read_sam_path,args.sr_region_selection,args.filtering,args.threads,lr_region_selection=args.lr_region_selection,READ_JUNC_MIN_MAP_LEN=args.READ_JUNC_MIN_MAP_LEN,filter_tpm=args.filterTPM)
     elif args.subparser_name in ['quantify','EM']:
         config.kde_path = args.kde_path
         if args.training == 'True':

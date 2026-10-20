@@ -31,6 +31,31 @@ def get_full_length_region_set(gene_regions_dict, rname, gname):
                 regions_set.add(region)
     return regions_set
 
+def get_forced_full_length_regions(gene_regions_dict, rname, gname, gene_isoforms_length_dict, median_read_len):
+    """
+    Regions that must be force-kept regardless of the standard read-length region
+    filter: for isoforms whose own total length is not greater than the LR median
+    read length (i.e. reads covering them are expected to be full-length reads),
+    keep their full-length region(s) (the region(s) spanning the maximum number of
+    their own exons) so the isoform never ends up with zero valid regions.
+    If such a region happens to be shared with another (possibly longer) isoform,
+    it is force-kept globally, so that isoform benefits from it too.
+    """
+    forced_regions = set()
+    isoform_region_dict = defaultdict(lambda: set())
+    for region in gene_regions_dict[rname][gname]:
+        for isoform in gene_regions_dict[rname][gname][region]:
+            isoform_region_dict[isoform].add(region)
+    isoform_lengths = gene_isoforms_length_dict.get(rname, {}).get(gname, {})
+    for isoform, regions in isoform_region_dict.items():
+        if isoform_lengths.get(isoform, 0) > median_read_len:
+            continue   # long isoform: no override, standard filter applies
+        max_region_exon_num = max(region.count(':') for region in regions)
+        for region in regions:
+            if region.count(':') == max_region_exon_num:
+                forced_regions.add(region)
+    return forced_regions
+
 def construct_region_abundance_matrix_long_read(region_read_count_dict, region_names_indics):
     region_read_count_matrix = np.zeros((len(region_names_indics)))
     for region_name in region_read_count_dict:

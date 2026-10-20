@@ -32,7 +32,14 @@ def construct_isoform_region_matrix(isoform_region_dict,region_names_indics,isof
         sum_A[sum_A==0] = 1
         isoform_region_matrix = isoform_region_matrix/sum_A
     return isoform_region_matrix
-def calculate_eff_length(region_len_dict,SR_read_len):
+def calculate_eff_length(region_len_dict,SR_read_len,floor=1):
+    # floor: value assigned when the theoretical effective length is <= 0 (i.e. no read
+    # of length SR_read_len can be generated that is specific to this region).
+    # Quantification (generate_all_feature_matrix_short_read) uses this value both as an
+    # isoform-region matrix weight and as a divisor to build region abundances, so it must
+    # stay a positive floor (default 1) there to avoid division by zero. The identifiability-only
+    # path (calculate_all_condition_number) only uses it as a matrix weight, where 0 is the
+    # theoretically correct choice: an unspannable region should contribute no evidence.
     region_eff_length_dict = {}
     for region_name in region_len_dict:
         region_len = region_len_dict[region_name]
@@ -56,7 +63,7 @@ def calculate_eff_length(region_len_dict,SR_read_len):
             inner_region_len = cal_inner_region_len(region_name,region_len_dict)
             region_eff_length = SR_read_len - inner_region_len - config.READ_JUNC_MIN_MAP_LEN
         if region_eff_length <= 0 :
-            region_eff_length = 1
+            region_eff_length = floor
         region_eff_length_dict[region_name] = region_eff_length
     return region_eff_length_dict
 def construct_region_abundance_matrix_short_read(region_read_count_dict,region_eff_length_dict,region_names_indics,num_SRs):
@@ -185,7 +192,7 @@ def calculate_all_condition_number(gene_isoforms_dict,gene_regions_dict,gene_reg
         region_isoform_dict = gene_regions_dict[chr_name][gene_name]
         md = calculate_condition_number(region_isoform_dict, isoform_names, config.normalize_sr_A)
         region_len_dict = gene_region_len_dict[chr_name][gene_name]
-        md['region_eff_length_dict'] = calculate_eff_length(region_len_dict, SR_read_len)
+        md['region_eff_length_dict'] = calculate_eff_length(region_len_dict, SR_read_len, floor=0)
         if config.sr_design_matrix == 'weight':
             md['isoform_region_matrix'] = cal_weight_region(md)
             if config.normalize_sr_A:

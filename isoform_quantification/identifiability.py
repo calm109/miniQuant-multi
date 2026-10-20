@@ -20,12 +20,20 @@ and theta is taken from EM quantification results (Isoform_abundance.out).
 
 If no EM results are found, only the original k-values (SVD of A) are output.
 
-Outputs: identifiability.tsv  (one row per gene)
+Outputs: identifiability.tsv, isoform_SE_CI.tsv  (one row per gene / per isoform)
+
+Optional --filterTPM: additionally recomputes both files after dropping, per gene,
+isoforms with theta_hat < 1e-5, writing identifiability_filterTPM.tsv and
+isoform_SE_CI_filterTPM.tsv alongside the unfiltered files (which are unaffected).
 """
 
 import math
 import os
 import csv
+import hashlib
+import json
+import sys
+import tempfile
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -119,7 +127,7 @@ def _metrics_from_Fisher(F_tan):
                             0 for non-identifiable matrices, actual value otherwise.
       fisher_identifiable : True if F_tan is positive definite (all eigenvalues
                             >= _FISHER_EIG_TOL), else False.
-      fisher_det          : log10(|det(F_tan)|^(1/T)) — D-optimality metric (log10 of
+      fisher_det          : log10(|det(F_tan)|^(1/T-1)) — D-optimality metric (log10 of
                             T-th root of absolute determinant,
                             T = number of isoforms = F_tan.shape[0]+1);
                             nan when singular (det=0) or on numerical sign error.
@@ -132,7 +140,7 @@ def _metrics_from_Fisher(F_tan):
     if sign <= 0:
         fisher_det = math.nan   # det <= 0: singular or fp artifact
     else:
-        fisher_det = float(logabsdet / (T * math.log(10)))
+        fisher_det = float(logabsdet / ((T-1) * math.log(10)))
     # eigenvalues < _FISHER_EIG_TOL are treated as 0; lambda_min = 0 for non-identifiable
     thresholded = np.where(eigvals_clipped < _FISHER_EIG_TOL, 0.0, eigvals_clipped)
     lambda_min = float(thresholded[0])
@@ -195,7 +203,7 @@ def _compute_se_ci(F_tan, B, theta_hat, gamma=0.05):
     se = np.where(is_null, np.nan, np.sqrt(np.maximum(diag_var, 0.0)))
 
     z = _Z_95 if gamma == 0.05 else float(
-        -np.log(gamma / 2) ** 0.5 * np.sqrt(2))   # fallback approx
+        np.sqrt(-2.0 * np.log(gamma / 2.0)))       # fallback approx
     safe_se = np.where(is_null, 0.0, se)           # avoid nan propagation in arithmetic
     ci_lo = np.where(is_null, np.nan, np.maximum(0.0, theta_hat - z * safe_se))
     ci_hi = np.where(is_null, np.nan, np.minimum(1.0, theta_hat + z * safe_se))
@@ -225,7 +233,7 @@ def _fisher_metrics_and_se_ci(F_tan, B, theta_hat):
     if np.any(eigvals <= 0.0):
         fisher_det = math.nan
     else:
-        fisher_det = float(np.sum(np.log(eigvals)) / (T_iso * math.log(10)))
+        fisher_det = float(np.sum(np.log(eigvals)) / ((T_iso-1) * math.log(10)))
 
     thresholded = np.where(eigvals_clipped < _FISHER_EIG_TOL, 0.0, eigvals_clipped)
     lambda_min = float(thresholded[0])
@@ -263,7 +271,8 @@ def _fisher_metrics_and_se_ci(F_tan, B, theta_hat):
 # ---------------------------------------------------------------------------
 
 def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
-                                  theta_hat_em=None, n_lrs=None, n_srs=None):
+                                  theta_hat_em=None, n_lrs=None, n_srs=None,
+                                  _diagnostics=None):
     """
     Compute identifiability metrics for a single gene, supporting multiple samples.
 
@@ -276,6 +285,8 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
     theta_hat_em       : np.ndarray or None  isoform relative abundances (sums to 1)
     n_lrs              : list of int  reads per LR sample (scales F_L; default 1 each)
     n_srs              : list of int  reads per SR sample (scales F_S; default 1 each)
+    _diagnostics       : dict or None  optional collector for lossless diagnostic arrays;
+                         does not change the returned metrics or calculations
 
     Returns
     -------
@@ -313,6 +324,14 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
 
     B = compute_tangent_basis(T)
     _EPS = 1e-12
+    if _diagnostics is not None:
+        ref_md = lr_mds[0] if has_lr else sr_mds[0]
+        _diagnostics.update({
+            'B': B, 'theta_hat': theta_hat_em,
+            'isoform_names': _diagnostic_isoform_names(ref_md),
+            'fisher_eig_tol': _FISHER_EIG_TOL, 'probability_floor': _EPS,
+            'z_95': _Z_95,
+        })
 
     # ---- LR：各样本计算 Fisher 矩阵，加权求和 ----
     F_L = np.zeros((T - 1, T - 1))
@@ -324,6 +343,14 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         F_Lk = max(n_lr, 1) * (J_Lk.T @ ((1.0 / p_Lk)[:, None] * J_Lk))
         F_L += F_Lk
         F_L_list.append(F_Lk)
+        if _diagnostics is not None:
+            tag = f'LR_{len(F_L_list)}'
+            _diagnostics.update({
+                f'{tag}_A': A_L, f'{tag}_J_tan': J_Lk,
+                f'{tag}_p_used': p_Lk, f'{tag}_N_used': max(n_lr, 1),
+                f'{tag}_F_tan': F_Lk,
+                f'{tag}_isoform_names': _diagnostic_isoform_names(lr_md),
+            })
 
     if has_lr:
         # 多样本时额外输出每个样本的单独指标
@@ -358,6 +385,18 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
         F_Sk = max(n_sr, 1) * (J_Sk.T @ ((1.0 / p_Sk)[:, None] * J_Sk))
         F_S += F_Sk
         F_S_list.append(F_Sk)
+        if _diagnostics is not None:
+            tag = f'SR_{len(F_S_list)}'
+            _diagnostics.update({
+                f'{tag}_A': A_S, f'{tag}_J_tan': J_Sk,
+                f'{tag}_p_used': p_Sk, f'{tag}_N_used': max(n_sr, 1),
+                f'{tag}_F_tan': F_Sk, f'{tag}_phi': psi,
+                f'{tag}_J_phi': Jphi, f'{tag}_effective_lengths': l_tilde,
+                f'{tag}_isoform_lengths': sr_ref_md['isoform_lengths'],
+                f'{tag}_sr_read_len': sr_ref_md['sr_read_len'],
+                f'{tag}_isoform_names': _diagnostic_isoform_names(sr_ref_md),
+                f'{tag}_uses_theoretical': sr_theoretical_mds[len(F_S_list)-1] is not None,
+            })
 
     if has_sr:
         # 多样本时额外输出每个样本的单独指标
@@ -381,6 +420,8 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
     n_total_samples = (len(lr_mds) if has_lr else 0) + (len(sr_mds) if has_sr else 0)
     if n_total_samples > 1:
         F_H = F_L + F_S  # F_L/F_S 均从零初始化，无该平台时保持零矩阵
+        if _diagnostics is not None:
+            _diagnostics['Hybrid_F_tan'] = F_H
         flc_H, fhmin_H, fi_H, fd_H, se_ci_H = _fisher_metrics_and_se_ci(F_H, B, theta_hat_em)
         result['Hybrid'] = {
             'fisher_lambda_cond': flc_H, 'fisher_lambda_min': fhmin_H,
@@ -388,7 +429,42 @@ def compute_gene_identifiability(sr_mds, lr_mds, sr_theoretical_mds=None,
             'se_ci': se_ci_H,
         }
 
+    if _diagnostics is not None:
+        if has_lr:
+            _diagnostics['LR_F_tan'] = F_L
+        if has_sr:
+            _diagnostics['SR_F_tan'] = F_S
     return result
+
+
+def _diagnostic_isoform_names(md):
+    """Return names in actual column-index order, not dictionary insertion order."""
+    idx_to_name = {idx: name for name, idx in md.get('isoform_names_indics', {}).items()}
+    return np.asarray([idx_to_name.get(t, f'isoform_{t}')
+                       for t in range(md['isoform_region_matrix'].shape[1])], dtype=str)
+
+
+def _write_identifiability_diagnostic(directory, chr_name, gene_name, arrays,
+                                     scale_by_N, filtered, filter_tpm_threshold,
+                                     lr_source_indices, sr_source_indices):
+    """Write arrays without rounding or object pickles; errors propagate to the caller."""
+    if not arrays or 'theta_hat' not in arrays:
+        return
+    payload = dict(arrays)
+    payload.update({
+        'schema_version': 1, 'gene': gene_name, 'chr': chr_name,
+        'scale_by_N': scale_by_N, 'filtered': filtered,
+        'filter_tpm_threshold': filter_tpm_threshold,
+        'LR_source_sample_indices': np.asarray(lr_source_indices, dtype=np.int64),
+        'SR_source_sample_indices': np.asarray(sr_source_indices, dtype=np.int64),
+    })
+    # Gene identifiers may contain path separators; the payload retains their exact text.
+    key = json.dumps([chr_name, gene_name], ensure_ascii=False).encode('utf-8')
+    stem = hashlib.sha256(key).hexdigest()
+    suffix = '_filterTPM' if filtered else ''
+    path = os.path.join(directory, f'{stem}{suffix}.npz')
+    with open(path, 'xb') as stream:
+        np.savez_compressed(stream, **payload)
 
 
 # ---------------------------------------------------------------------------
@@ -497,13 +573,138 @@ def _build_theta_hat_em(gene_name, isoform_names_indics, gene_isoform_tpm):
 
 
 # ---------------------------------------------------------------------------
+# --filterTPM: optional low-abundance isoform filtering before identifiability
+# ---------------------------------------------------------------------------
+
+_FILTER_TPM_THRESHOLD = 1e-5
+
+
+def _tpm_keep_mask(theta_hat, threshold=_FILTER_TPM_THRESHOLD):
+    """
+    Boolean mask selecting isoforms with theta_hat >= threshold.
+    Returns None if fewer than 2 isoforms would remain (identifiability is undefined
+    for T < 2, so filtering is skipped for that gene rather than dropping it).
+    """
+    keep_mask = theta_hat >= threshold
+    if keep_mask.sum() < 2:
+        return None
+    return keep_mask
+
+
+def _filter_md(md, keep_mask):
+    """
+    Restrict matrix_dict `md` to the isoforms selected by keep_mask (aligned to
+    isoform_names_indics values, which are 0..T-1 contiguous column indices).
+
+    theta_hat is NOT renormalised to sum to 1 after filtering: since threshold is on
+    the order of 1e-5, the renormalisation error is far below _FISHER_EIG_TOL (1e-5)
+    and other numerical tolerances already used in this module, so it is dropped as a
+    deliberate, documented approximation rather than silently ignored.
+    """
+    if md is None:
+        return None
+    old_items = sorted(md['isoform_names_indics'].items(), key=lambda kv: kv[1])
+    kept_names = [name for name, idx in old_items if keep_mask[idx]]
+    new_md = {
+        'isoform_region_matrix': md['isoform_region_matrix'][:, keep_mask],
+        'isoform_names_indics': {name: i for i, name in enumerate(kept_names)},
+    }
+    if 'isoform_lengths' in md:
+        new_md['isoform_lengths'] = np.asarray(md['isoform_lengths'])[keep_mask]
+    if 'sr_read_len' in md:
+        new_md['sr_read_len'] = md['sr_read_len']
+    return new_md
+
+
+def _fmt(v):
+    return 'nan' if math.isnan(v) or math.isinf(v) else f'{v:.6g}'
+
+
+def _fse(v):
+    return 'null' if (not np.isfinite(v)) else f'{v:.6g}'
+
+
+def _build_metrics_row(gene_name, chr_name, metrics, extra_fields=None):
+    """
+    Build one identifiability.tsv row from a `metrics` dict (as returned by
+    compute_gene_identifiability), shared by the unfiltered and --filterTPM paths.
+
+    Returns (row, has_LR, has_SR, has_Hybrid, lr_per_sample_keys, sr_per_sample_keys,
+    lr_redundant, sr_redundant) — the trailing fields are also needed by
+    _build_se_ci_rows to know which platform tags are active.
+    """
+    has_LR, has_SR, has_Hybrid = 'LR' in metrics, 'SR' in metrics, 'Hybrid' in metrics
+    lr_per_sample_keys = sorted(k for k in metrics if k.startswith('LR_') and k[3:].isdigit())
+    sr_per_sample_keys = sorted(k for k in metrics if k.startswith('SR_') and k[3:].isdigit())
+    lr_redundant = bool(lr_per_sample_keys)
+    sr_redundant = bool(sr_per_sample_keys)
+
+    row = {'gene': gene_name, 'chr': chr_name}
+    if extra_fields:
+        row.update(extra_fields)
+
+    def _add(tag, m):
+        row.update({
+            f'{tag}_rfisher_lambda_min':   _fmt(m.get('fisher_lambda_min', math.nan)),
+            f'{tag}_rfisher_lambda_cond':  _fmt(m.get('fisher_lambda_cond', math.nan)),
+            f'{tag}_rfisher_det':          _fmt(m.get('fisher_det', math.nan)),
+            f'{tag}_rfisher_identifiable': m.get('fisher_identifiable', 'nan'),
+        })
+
+    for tag_k in lr_per_sample_keys:
+        _add(tag_k, metrics[tag_k])
+    for tag_k in sr_per_sample_keys:
+        _add(tag_k, metrics[tag_k])
+    if has_LR and not lr_redundant:
+        _add('LR', metrics['LR'])
+    if has_SR and not sr_redundant:
+        _add('SR', metrics['SR'])
+    if has_Hybrid:
+        _add('Hybrid', metrics['Hybrid'])
+
+    return row, has_LR, has_SR, has_Hybrid, lr_per_sample_keys, sr_per_sample_keys, lr_redundant, sr_redundant
+
+
+def _build_se_ci_rows(gene_name, chr_name, T, theta_hat, idx_to_name, metrics,
+                       has_LR, has_SR, has_Hybrid,
+                       lr_per_sample_keys, sr_per_sample_keys, lr_redundant, sr_redundant):
+    """Build per-isoform SE/CI rows, shared by the unfiltered and --filterTPM paths."""
+    active_tags = (
+        [(tag_k, metrics[tag_k].get('se_ci')) for tag_k in lr_per_sample_keys] +
+        [(tag_k, metrics[tag_k].get('se_ci')) for tag_k in sr_per_sample_keys] +
+        ([] if lr_redundant else [('LR', metrics['LR'].get('se_ci'))] if has_LR else []) +
+        ([] if sr_redundant else [('SR', metrics['SR'].get('se_ci'))] if has_SR else []) +
+        ([('Hybrid', metrics['Hybrid'].get('se_ci'))] if has_Hybrid else [])
+    )
+    rows = []
+    for t in range(T):
+        iso_name = idx_to_name.get(t, f'isoform_{t}')
+        iso_row = {'gene': gene_name, 'chr': chr_name, 'isoform': iso_name,
+                   'theta_hat': f'{theta_hat[t]:.6g}'}
+        for tag, sc in active_tags:
+            if sc is not None:
+                se, ci_lo, ci_hi = sc
+                iso_row[f'{tag}_SE']    = _fse(se[t])
+                iso_row[f'{tag}_CI_lo'] = _fse(ci_lo[t])
+                iso_row[f'{tag}_CI_hi'] = _fse(ci_hi[t])
+            else:
+                iso_row[f'{tag}_SE']    = 'null'
+                iso_row[f'{tag}_CI_lo'] = 'null'
+                iso_row[f'{tag}_CI_hi'] = 'null'
+        rows.append(iso_row)
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
 def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_input,
                                         sr_theoretical_input=None, threads=1,
                                         _preloaded_tpm=None, _preloaded_counts=None,
-                                        scale_by_N=True):
+                                        scale_by_N=True, filter_tpm=False,
+                                        filter_tpm_threshold=_FILTER_TPM_THRESHOLD,
+                                        output_identifiability_diagnostics=False):
     """
     Compute identifiability metrics for every gene and write identifiability.tsv.
 
@@ -522,6 +723,19 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
     scale_by_N           : bool  if True (default), Fisher matrices are scaled by per-gene
                            read counts N; if False, N=1 for all samples and results are
                            written to identifiability_no_N.tsv / isoform_SE_CI_no_N.tsv.
+    filter_tpm            : bool  if True, ADDITIONALLY compute identifiability after
+                           dropping isoforms with theta_hat < filter_tpm_threshold
+                           (per gene, from the same EM theta used for the unfiltered
+                           metrics) and write it to identifiability_filterTPM.tsv /
+                           isoform_SE_CI_filterTPM.tsv (with the _no_N suffix applied
+                           the same way as the unfiltered files). The unfiltered output
+                           is always written unchanged; this only adds extra files.
+    filter_tpm_threshold : float  relative-abundance threshold for filter_tpm
+                           (default 1e-5). theta_hat is not renormalised after
+                           filtering — see _filter_md.
+    output_identifiability_diagnostics : bool  default False; write lossless per-gene
+                           NPZ files into a new run directory below
+                           output_path/identifiability_diagnostics (see IDENTIFIABILITY_DIAGNOSTICS.md).
 
     This function is read-only with respect to the input dicts and does NOT
     affect quantification results.
@@ -558,6 +772,28 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
     else:
         gene_read_counts = _load_gene_read_counts(output_path) if has_em else None
 
+    diagnostic_dir = None
+    if output_identifiability_diagnostics:
+        diagnostic_root = os.path.join(output_path, 'identifiability_diagnostics')
+        os.makedirs(diagnostic_root, exist_ok=True)
+        diagnostic_dir = tempfile.mkdtemp(
+            prefix='with_N_' if scale_by_N else 'no_N_', dir=diagnostic_root)
+        with open(__file__, 'rb') as source:
+            source_hash = hashlib.sha256(source.read()).hexdigest()
+        diagnostic_metadata = {
+            'schema_version': 1, 'status': 'started',
+            'python_version': sys.version, 'numpy_version': np.__version__,
+            'argv': sys.argv, 'identifiability_source_sha256': source_hash,
+            'scale_by_N': scale_by_N, 'filter_tpm': filter_tpm,
+            'filter_tpm_threshold': filter_tpm_threshold,
+            'fisher_eig_tol': _FISHER_EIG_TOL,
+            'has_abundance_data': has_em,
+            'counts_available': gene_read_counts is not None,
+        }
+        with open(os.path.join(diagnostic_dir, 'metadata.json'), 'x', encoding='utf-8') as stream:
+            json.dump(diagnostic_metadata, stream, ensure_ascii=False, indent=2)
+        print(f'[INFO] High-precision diagnostics: {diagnostic_dir}', flush=True)
+
     def _fmt(v):
         return 'nan' if math.isnan(v) or math.isinf(v) else f'{v:.6g}'
 
@@ -580,7 +816,12 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
                 all_gene_keys.add((chr_name, gene_name))
 
     def _process_one_gene(chr_name, gene_name):
-        """Per-gene worker; returns (row, se_ci_rows_gene, is_zero_expr) or None."""
+        """
+        Per-gene worker; returns None, or
+        (row, se_ci_rows_gene, filtered_row, filtered_se_ci_rows_gene) where the
+        filtered_* entries are None/[] unless filter_tpm is enabled and at least
+        one isoform was actually dropped for this gene.
+        """
         # 收集每个 LR 样本的 matrix_dict
         lr_mds_gene = [l_all[chr_name][gene_name]
                        for l_all in lr_list
@@ -609,11 +850,15 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
 
         theta_hat_em = None
         is_zero_expr = False
+        not_in_em = False
         if has_em:
             iso_indics = ref_md.get('isoform_names_indics', {})
             theta_hat_em = _build_theta_hat_em(gene_name, iso_indics, gene_isoform_tpm)
-            if theta_hat_em is None and gene_name in gene_isoform_tpm:
-                is_zero_expr = True
+            if theta_hat_em is None:
+                if gene_name in gene_isoform_tpm:
+                    is_zero_expr = True   # gene present in EM output, all isoform TPM == 0
+                else:
+                    not_in_em = True      # gene absent from EM output entirely
 
         counts = gene_read_counts.get(gene_name, ([], [])) if gene_read_counts else ([], [])
         n_lrs_gene = [max(n, 1) for n in counts[0]] if counts[0] else [1] * len(lr_mds_gene)
@@ -621,10 +866,12 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
         n_lrs_gene = (n_lrs_gene + [1] * len(lr_mds_gene))[:len(lr_mds_gene)]
         n_srs_gene = (n_srs_gene + [1] * len(sr_mds_gene))[:len(sr_mds_gene)]
 
+        diagnostics = {} if diagnostic_dir is not None else None
         try:
             metrics = compute_gene_identifiability(
                 sr_mds_gene, lr_mds_gene, sr_theoretical_mds_gene,
-                theta_hat_em, n_lrs=n_lrs_gene, n_srs=n_srs_gene)
+                theta_hat_em, n_lrs=n_lrs_gene, n_srs=n_srs_gene,
+                _diagnostics=diagnostics)
         except Exception as exc:
             print(f'[WARN] identifiability skipped for {gene_name}: {exc}', flush=True)
             return None
@@ -632,73 +879,44 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
         if metrics is None:
             return None
 
+        if diagnostic_dir is not None:
+            lr_source_indices = [k for k, d in enumerate(lr_list, 1)
+                                 if d is not None and gene_name in d.get(chr_name, {})]
+            sr_source_indices = [k for k, d in enumerate(sr_list, 1)
+                                 if d is not None and gene_name in d.get(chr_name, {})]
+            _write_identifiability_diagnostic(
+                diagnostic_dir, chr_name, gene_name, diagnostics, scale_by_N,
+                False, filter_tpm_threshold, lr_source_indices, sr_source_indices)
+
         ref_for_T = sr_mds_gene[0] if sr_mds_gene else lr_mds_gene[0]
         T = ref_for_T['isoform_region_matrix'].shape[1]
 
         # 只输出 metrics 中实际存在的平台对应的列
-        has_LR     = 'LR'     in metrics
-        has_SR     = 'SR'     in metrics
-        has_Hybrid = 'Hybrid' in metrics
-        # 分样本键：LR_1, LR_2, ... 和 SR_1, SR_2, ...
-        lr_per_sample_keys = sorted([k for k in metrics if k.startswith('LR_') and k[3:].isdigit()])
-        sr_per_sample_keys = sorted([k for k in metrics if k.startswith('SR_') and k[3:].isdigit()])
-        # 只要有分样本键就不再单独输出该平台合并列，合并结果统一用 Hybrid_* 表示
-        lr_platform_redundant = bool(lr_per_sample_keys)
-        sr_platform_redundant = bool(sr_per_sample_keys)
-
         row = {'gene': gene_name, 'chr': chr_name, 'n_isoforms': T}
+        has_LR = has_SR = has_Hybrid = False
+        lr_per_sample_keys, sr_per_sample_keys = [], []
+        lr_platform_redundant = sr_platform_redundant = False
 
         if has_em and theta_hat_em is not None:
-            # 分样本 Fisher 指标先输出
-            for tag_k in lr_per_sample_keys:
-                m_k = metrics[tag_k]
-                row.update({
-                    f'{tag_k}_rfisher_lambda_min':         _fmt(m_k.get('fisher_lambda_min', math.nan)),
-                    f'{tag_k}_rfisher_lambda_cond':        _fmt(m_k.get('fisher_lambda_cond', math.nan)),
-                    f'{tag_k}_rfisher_det':                _fmt(m_k.get('fisher_det', math.nan)),
-                    f'{tag_k}_rfisher_identifiable':       m_k.get('fisher_identifiable', 'nan'),
-                })
-            for tag_k in sr_per_sample_keys:
-                m_k = metrics[tag_k]
-                row.update({
-                    f'{tag_k}_rfisher_lambda_min':         _fmt(m_k.get('fisher_lambda_min', math.nan)),
-                    f'{tag_k}_rfisher_lambda_cond':        _fmt(m_k.get('fisher_lambda_cond', math.nan)),
-                    f'{tag_k}_rfisher_det':                _fmt(m_k.get('fisher_det', math.nan)),
-                    f'{tag_k}_rfisher_identifiable':       m_k.get('fisher_identifiable', 'nan'),
-                })
-            # 平台合并指标（仅在非冗余时输出）
-            if has_LR and not lr_platform_redundant:
-                lr_m = metrics['LR']
-                row.update({
-                    'LR_rfisher_lambda_min':     _fmt(lr_m.get('fisher_lambda_min', math.nan)),
-                    'LR_rfisher_lambda_cond':    _fmt(lr_m.get('fisher_lambda_cond', math.nan)),
-                    'LR_rfisher_det':            _fmt(lr_m.get('fisher_det', math.nan)),
-                    'LR_rfisher_identifiable':   lr_m.get('fisher_identifiable', 'nan'),
-                })
-            if has_SR and not sr_platform_redundant:
-                sr_m = metrics['SR']
-                row.update({
-                    'SR_rfisher_lambda_min':     _fmt(sr_m.get('fisher_lambda_min', math.nan)),
-                    'SR_rfisher_lambda_cond':    _fmt(sr_m.get('fisher_lambda_cond', math.nan)),
-                    'SR_rfisher_det':            _fmt(sr_m.get('fisher_det', math.nan)),
-                    'SR_rfisher_identifiable':   sr_m.get('fisher_identifiable', 'nan'),
-                })
-            # Hybrid 放最后
-            if has_Hybrid:
-                h = metrics['Hybrid']
-                row.update({
-                    'Hybrid_rfisher_lambda_min':     _fmt(h.get('fisher_lambda_min', math.nan)),
-                    'Hybrid_rfisher_lambda_cond':    _fmt(h.get('fisher_lambda_cond', math.nan)),
-                    'Hybrid_rfisher_det':            _fmt(h.get('fisher_det', math.nan)),
-                    'Hybrid_rfisher_identifiable':   h.get('fisher_identifiable', 'nan'),
-                })
-        elif is_zero_expr:
+            (row, has_LR, has_SR, has_Hybrid,
+             lr_per_sample_keys, sr_per_sample_keys,
+             lr_platform_redundant, sr_platform_redundant) = _build_metrics_row(
+                gene_name, chr_name, metrics, extra_fields={'n_isoforms': T})
+        elif is_zero_expr or not_in_em:
+            has_LR, has_SR = 'LR' in metrics, 'SR' in metrics
+
+            def _mark_zero_expr(tag):
+                row[f'{tag}_rfisher_lambda_min']   = 'zero'
+                row[f'{tag}_rfisher_lambda_cond']  = 'zero'
+                row[f'{tag}_rfisher_det']          = 'zero'
+                row[f'{tag}_rfisher_identifiable'] = 'zero'
+
             if has_LR:
-                row['LR_rfisher_identifiable'] = False
+                _mark_zero_expr('LR')
             if has_SR:
-                row['SR_rfisher_identifiable'] = False
+                _mark_zero_expr('SR')
             if len(lr_mds_gene) + len(sr_mds_gene) > 1:
-                row['Hybrid_rfisher_identifiable'] = False
+                _mark_zero_expr('Hybrid')
 
         # ---- 收集 per-isoform SE / CI 行 ----
         se_ci_rows_gene = []
@@ -706,32 +924,11 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
             iso_indics = ref_md.get('isoform_names_indics', {})
             idx_to_name = {v: k for k, v in iso_indics.items()}
             if theta_hat_em is not None:
-                active_tags = (
-                    [(tag_k, metrics[tag_k].get('se_ci')) for tag_k in lr_per_sample_keys] +
-                    [(tag_k, metrics[tag_k].get('se_ci')) for tag_k in sr_per_sample_keys] +
-                    ([] if lr_platform_redundant else [('LR', metrics['LR'].get('se_ci'))] if has_LR else []) +
-                    ([] if sr_platform_redundant else [('SR', metrics['SR'].get('se_ci'))] if has_SR else []) +
-                    ([('Hybrid', metrics['Hybrid'].get('se_ci'))] if has_Hybrid else [])
-                )
-                for t in range(T):
-                    iso_name = idx_to_name.get(t, f'isoform_{t}')
-                    iso_row = {
-                        'gene':      gene_name,
-                        'chr':       chr_name,
-                        'isoform':   iso_name,
-                        'theta_hat': f'{theta_hat_em[t]:.6g}',
-                    }
-                    for tag, sc in active_tags:
-                        if sc is not None:
-                            se, ci_lo, ci_hi = sc
-                            iso_row[f'{tag}_SE']    = _fse(se[t])
-                            iso_row[f'{tag}_CI_lo'] = _fse(ci_lo[t])
-                            iso_row[f'{tag}_CI_hi'] = _fse(ci_hi[t])
-                        else:
-                            iso_row[f'{tag}_SE']    = 'null'
-                            iso_row[f'{tag}_CI_lo'] = 'null'
-                            iso_row[f'{tag}_CI_hi'] = 'null'
-                    se_ci_rows_gene.append(iso_row)
+                se_ci_rows_gene = _build_se_ci_rows(
+                    gene_name, chr_name, T, theta_hat_em, idx_to_name, metrics,
+                    has_LR, has_SR, has_Hybrid,
+                    lr_per_sample_keys, sr_per_sample_keys,
+                    lr_platform_redundant, sr_platform_redundant)
             else:
                 for t in range(T):
                     iso_name = idx_to_name.get(t, f'isoform_{t}')
@@ -742,11 +939,80 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
                         'theta_hat': 'null',
                     })
 
-        return row, se_ci_rows_gene
+        # ---- --filterTPM：额外用去除低丰度转录本(theta_hat < filter_tpm_threshold)
+        #      后的矩阵重算一遍可识别性，原始（未过滤）结果不受影响 ----
+        filtered_row = None
+        filtered_se_ci_rows_gene = []
+        if filter_tpm and has_em and theta_hat_em is not None:
+            keep_mask = _tpm_keep_mask(theta_hat_em, filter_tpm_threshold)
+            if keep_mask is not None and not keep_mask.all():
+                iso_indics = ref_md.get('isoform_names_indics', {})
+                idx_to_name = {v: k for k, v in iso_indics.items()}
+                removed_names = [idx_to_name.get(t, f'isoform_{t}')
+                                  for t in range(T) if not keep_mask[t]]
+
+                lr_mds_f = [_filter_md(md, keep_mask) for md in lr_mds_gene]
+                sr_mds_f = [_filter_md(md, keep_mask) for md in sr_mds_gene]
+                sr_theoretical_mds_f = [_filter_md(md, keep_mask) for md in sr_theoretical_mds_gene]
+                theta_hat_f = theta_hat_em[keep_mask]
+                T_f = int(keep_mask.sum())
+
+                diagnostics_f = {} if diagnostic_dir is not None else None
+                try:
+                    metrics_f = compute_gene_identifiability(
+                        sr_mds_f, lr_mds_f, sr_theoretical_mds_f,
+                        theta_hat_f, n_lrs=n_lrs_gene, n_srs=n_srs_gene,
+                        _diagnostics=diagnostics_f)
+                except Exception as exc:
+                    print(f'[WARN] filterTPM identifiability skipped for {gene_name}: {exc}', flush=True)
+                    metrics_f = None
+
+                if metrics_f is not None:
+                    if diagnostic_dir is not None:
+                        diagnostics_f['kept_original_indices'] = np.flatnonzero(keep_mask)
+                        _write_identifiability_diagnostic(
+                            diagnostic_dir, chr_name, gene_name, diagnostics_f,
+                            scale_by_N, True, filter_tpm_threshold,
+                            lr_source_indices, sr_source_indices)
+                    extra = {
+                        'n_isoforms': T_f,
+                        'n_isoforms_removed': T - T_f,
+                        'removed_isoforms': ';'.join(removed_names),
+                    }
+                    (filtered_row, has_LR_f, has_SR_f, has_Hybrid_f,
+                     lr_keys_f, sr_keys_f, lr_redund_f, sr_redund_f) = _build_metrics_row(
+                        gene_name, chr_name, metrics_f, extra_fields=extra)
+
+                    ref_md_f = lr_mds_f[0] if lr_mds_f else sr_mds_f[0]
+                    idx_to_name_f = {v: k for k, v in ref_md_f['isoform_names_indics'].items()}
+                    filtered_se_ci_rows_gene = _build_se_ci_rows(
+                        gene_name, chr_name, T_f, theta_hat_f, idx_to_name_f, metrics_f,
+                        has_LR_f, has_SR_f, has_Hybrid_f,
+                        lr_keys_f, sr_keys_f, lr_redund_f, sr_redund_f)
+
+        return row, se_ci_rows_gene, filtered_row, filtered_se_ci_rows_gene
+
+    def _write_tsv(rows_, out_file, default_val, label):
+        if not rows_:
+            print(f'[INFO] No {label} to write.', flush=True)
+            return
+        fieldnames = list(rows_[0].keys())
+        for r in rows_[1:]:
+            for k in r:
+                if k not in fieldnames:
+                    fieldnames.append(k)
+        with open(out_file, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\t', extrasaction='ignore')
+            writer.writeheader()
+            for r in rows_:
+                writer.writerow({k: r.get(k, default_val) for k in fieldnames})
+        print(f'[INFO] {label} written to {out_file} ({len(rows_)} rows)', flush=True)
 
     # ---- 并行计算每个基因 ----
     rows = []
     se_ci_rows = []
+    filtered_rows = []
+    filtered_se_ci_rows = []
     gene_keys_sorted = sorted(all_gene_keys)
     results_dict = {}
     with ThreadPoolExecutor(max_workers=max(1, threads)) as executor:
@@ -764,47 +1030,36 @@ def compute_and_output_identifiability(output_path, sr_matrix_input, lr_matrix_i
     for key in gene_keys_sorted:
         if key not in results_dict:
             continue
-        row, se_ci_rows_gene = results_dict[key]
+        row, se_ci_rows_gene, filtered_row, filtered_se_ci_rows_gene = results_dict[key]
         rows.append(row)
         se_ci_rows.extend(se_ci_rows_gene)
+        if filtered_row is not None:
+            filtered_rows.append(filtered_row)
+            filtered_se_ci_rows.extend(filtered_se_ci_rows_gene)
 
-    out_file = os.path.join(output_path, f'identifiability{suffix}.tsv')
-    if rows:
-        # Collect all fieldnames from all rows (union, preserving first-seen order)
-        fieldnames = list(rows[0].keys())
-        for r in rows[1:]:
-            for k in r:
-                if k not in fieldnames:
-                    fieldnames.append(k)
-        with open(out_file, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\t', extrasaction='ignore')
-            writer.writeheader()
-            for r in rows:
-                writer.writerow({k: r.get(k, 'nan') for k in fieldnames})
-        print(f'[INFO] Identifiability metrics written to {out_file} ({len(rows)} genes)',
-              flush=True)
-    else:
+    if not rows:
         print('[INFO] No genes with sufficient data for identifiability analysis.', flush=True)
+    _write_tsv(rows, os.path.join(output_path, f'identifiability{suffix}.tsv'),
+               'nan', 'Identifiability metrics')
+    _write_tsv(se_ci_rows, os.path.join(output_path, f'isoform_SE_CI{suffix}.tsv'),
+               'null', 'Isoform SE/CI')
 
-    # ---- 写 isoform_SE_CI.tsv ----
-    se_ci_file = os.path.join(output_path, f'isoform_SE_CI{suffix}.tsv')
-    if se_ci_rows:
-        # 列名从实际行数据中动态收集（保留首次出现顺序）
-        se_ci_fields = list(se_ci_rows[0].keys())
-        for r in se_ci_rows[1:]:
-            for k in r:
-                if k not in se_ci_fields:
-                    se_ci_fields.append(k)
-        with open(se_ci_file, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=se_ci_fields, delimiter='\t',
-                                    extrasaction='ignore')
-            writer.writeheader()
-            for r in se_ci_rows:
-                writer.writerow({k: r.get(k, 'null') for k in se_ci_fields})
-        print(f'[INFO] Isoform SE/CI written to {se_ci_file} ({len(se_ci_rows)} isoforms)',
-              flush=True)
-    else:
-        print('[INFO] No isoform SE/CI computed (no invertible Fisher matrix found).', flush=True)
+    # ---- --filterTPM：额外写出去除低丰度转录本后的可识别性结果 ----
+    # 仅对实际发生了过滤的基因输出行；未触发过滤的基因（theta_hat 全部
+    # >= 阈值，或过滤后剩余异构体不足 2 个）不出现在这两个文件里。
+    if filter_tpm:
+        _write_tsv(filtered_rows, os.path.join(output_path, f'identifiability_filterTPM{suffix}.tsv'),
+                   'nan', f'Identifiability metrics (filterTPM, threshold={filter_tpm_threshold:g})')
+        _write_tsv(filtered_se_ci_rows, os.path.join(output_path, f'isoform_SE_CI_filterTPM{suffix}.tsv'),
+                   'null', f'Isoform SE/CI (filterTPM, threshold={filter_tpm_threshold:g})')
+
+    if diagnostic_dir is not None:
+        diagnostic_metadata['status'] = 'complete'
+        diagnostic_metadata['genes_in_metrics_output'] = len(rows)
+        diagnostic_metadata['npz_files'] = sum(
+            name.endswith('.npz') for name in os.listdir(diagnostic_dir))
+        with open(os.path.join(diagnostic_dir, 'metadata.json'), 'w', encoding='utf-8') as stream:
+            json.dump(diagnostic_metadata, stream, ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------------------------
